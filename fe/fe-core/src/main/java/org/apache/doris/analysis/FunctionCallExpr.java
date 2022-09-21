@@ -1031,23 +1031,7 @@ public class FunctionCallExpr extends Expr {
             throw new AnalysisException(getFunctionNotFoundError(collectChildReturnTypes()));
         }
 
-        if (fn.getArgs().length == children.size() && fn.getArgs().length == 1) {
-            if (fn.getArgs()[0].isDatetimeV2() && children.get(0).getType().isDatetimeV2()) {
-                fn.setArgType(children.get(0).getType(), 0);
-                if (fn.getReturnType().isDatetimeV2()) {
-                    fn.setReturnType(children.get(0).getType());
-                }
-            }
-        }
-
-        if (TIME_FUNCTIONS_WITH_PRECISION.contains(fnName.getFunction().toLowerCase())
-                && fn != null && fn.getReturnType().isDatetimeV2()) {
-            if (children.size() == 1 && children.get(0) instanceof IntLiteral) {
-                fn.setReturnType(ScalarType.createDatetimeV2Type((int) ((IntLiteral) children.get(0)).getLongValue()));
-            } else if (children.size() == 1) {
-                fn.setReturnType(ScalarType.createDatetimeV2Type(6));
-            }
-        }
+        applyAutoTypeConversionForDatetimeV2();
 
         if (fnName.getFunction().equalsIgnoreCase("from_unixtime")
                 || fnName.getFunction().equalsIgnoreCase("date_format")) {
@@ -1211,6 +1195,30 @@ public class FunctionCallExpr extends Expr {
         analyzeNestedFunction();
     }
 
+    private void applyAutoTypeConversionForDatetimeV2() {
+        // Rule1: Now we treat datetimev2 with different precisions as different types and we only register functions
+        // for datetimev2(0). So we must apply an automatic type conversion from datetimev2(0) to the real type.
+        if (fn.getArgs().length == children.size() && fn.getArgs().length > 0) {
+            if (fn.getArgs()[0].isDatetimeV2() && children.get(0).getType().isDatetimeV2()) {
+                fn.setArgType(children.get(0).getType(), 0);
+                if (fn.getReturnType().isDatetimeV2()) {
+                    fn.setReturnType(children.get(0).getType());
+                }
+            }
+        }
+
+        // Rule2: For functions in TIME_FUNCTIONS_WITH_PRECISION, we can't figure out which function should be use when
+        // searching in FunctionSet. So we adjust the return type by hand here.
+        if (TIME_FUNCTIONS_WITH_PRECISION.contains(fnName.getFunction().toLowerCase())
+                && fn != null && fn.getReturnType().isDatetimeV2()) {
+            if (children.size() == 1 && children.get(0) instanceof IntLiteral) {
+                fn.setReturnType(ScalarType.createDatetimeV2Type((int) ((IntLiteral) children.get(0)).getLongValue()));
+            } else if (children.size() == 1) {
+                fn.setReturnType(ScalarType.createDatetimeV2Type(6));
+            }
+        }
+    }
+
     // if return type is nested type, need to be determined the sub-element type
     private void analyzeNestedFunction() {
         // array
@@ -1222,7 +1230,8 @@ public class FunctionCallExpr extends Expr {
 
         if (this.type instanceof ArrayType) {
             ArrayType arrayType = (ArrayType) type;
-            boolean containsNull = false;
+            // Now Array type do not support ARRAY<NOT_NULL>, set it too true temporarily
+            boolean containsNull = true;
             for (Expr child : children) {
                 Type childType = child.getType();
                 if (childType instanceof ArrayType) {
@@ -1445,7 +1454,8 @@ public class FunctionCallExpr extends Expr {
         } else if (fnName.getFunction().equalsIgnoreCase("year")
                 || fnName.getFunction().equalsIgnoreCase("max")
                 || fnName.getFunction().equalsIgnoreCase("min")
-                || fnName.getFunction().equalsIgnoreCase("avg")) {
+                || fnName.getFunction().equalsIgnoreCase("avg")
+                || fnName.getFunction().equalsIgnoreCase("weekOfYear")) {
             Type childType = getChild(0).type;
             fn = getBuiltinFunction(fnName.getFunction(), new Type[]{childType},
                     Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF);

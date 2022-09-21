@@ -386,7 +386,7 @@ void VOlapScanNode::transfer_thread(RuntimeState* state) {
 }
 
 void VOlapScanNode::scanner_thread(VOlapScanner* scanner) {
-    SCOPED_ATTACH_TASK(_runtime_state);
+    // SCOPED_ATTACH_TASK(_runtime_state); // TODO Recorded on an independent tracker
     SCOPED_CONSUME_MEM_TRACKER(mem_tracker());
     Thread::set_self_name("volap_scanner");
     int64_t wait_time = scanner->update_wait_worker_timer();
@@ -474,8 +474,8 @@ void VOlapScanNode::scanner_thread(VOlapScanner* scanner) {
             num_rows_in_block < _runtime_state->batch_size())) {
         if (UNLIKELY(_transfer_done)) {
             eos = true;
-            status = Status::Cancelled("Cancelled");
-            LOG(INFO) << "Scan thread cancelled, cause query done, maybe reach limit.";
+            status = Status::Cancelled(
+                    "Scan thread cancelled, cause query done, maybe reach limit.");
             break;
         }
 
@@ -1082,7 +1082,6 @@ Status VOlapScanNode::get_next(RuntimeState* state, Block* block, bool* eos) {
 
             _block_consumed_cv.notify_all();
             *eos = true;
-            LOG(INFO) << "VOlapScanNode ReachedLimit.";
         } else {
             *eos = false;
         }

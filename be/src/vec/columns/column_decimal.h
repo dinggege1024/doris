@@ -97,7 +97,7 @@ public:
     void resize(size_t n) override { data.resize(n); }
 
     void insert_from(const IColumn& src, size_t n) override {
-        data.push_back(static_cast<const Self&>(src).get_data()[n]);
+        data.push_back(assert_cast<const Self&>(src).get_data()[n]);
     }
 
     void insert_indices_from(const IColumn& src, const int* indices_begin,
@@ -154,6 +154,13 @@ public:
                                        const uint8_t* null_map) override;
 
     void update_hash_with_value(size_t n, SipHash& hash) const override;
+    void update_hashes_with_value(std::vector<SipHash>& hashes,
+                                  const uint8_t* __restrict null_data) const override;
+    void update_hashes_with_value(uint64_t* __restrict hashes,
+                                  const uint8_t* __restrict null_data) const override;
+    void update_crcs_with_value(std::vector<uint64_t>& hashes, PrimitiveType type,
+                                const uint8_t* __restrict null_data) const override;
+
     int compare_at(size_t n, size_t m, const IColumn& rhs_, int nan_direction_hint) const override;
     void get_permutation(bool reverse, size_t limit, int nan_direction_hint,
                          IColumn::Permutation& res) const override;
@@ -215,13 +222,20 @@ public:
 
     void replace_column_data(const IColumn& rhs, size_t row, size_t self_row = 0) override {
         DCHECK(size() > self_row);
-        data[self_row] = static_cast<const Self&>(rhs).data[row];
+        data[self_row] = assert_cast<const Self&>(rhs).data[row];
     }
 
     void replace_column_data_default(size_t self_row = 0) override {
         DCHECK(size() > self_row);
         data[self_row] = T();
     }
+
+    void sort_column(const ColumnSorter* sorter, EqualFlags& flags, IColumn::Permutation& perms,
+                     EqualRange& range, bool last_column) const override;
+
+    void compare_internal(size_t rhs_row_id, const IColumn& rhs, int nan_direction_hint,
+                          int direction, std::vector<uint8>& cmp_res,
+                          uint8* __restrict filter) const override;
 
     UInt32 get_scale() const { return scale; }
 

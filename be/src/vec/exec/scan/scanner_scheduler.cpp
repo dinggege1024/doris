@@ -20,6 +20,7 @@
 #include "common/config.h"
 #include "util/priority_thread_pool.hpp"
 #include "util/priority_work_stealing_thread_pool.hpp"
+#include "util/telemetry/telemetry.h"
 #include "util/thread.h"
 #include "util/threadpool.h"
 #include "vec/core/block.h"
@@ -31,11 +32,28 @@ namespace doris::vectorized {
 ScannerScheduler::ScannerScheduler() {}
 
 ScannerScheduler::~ScannerScheduler() {
+    if (!_is_init) {
+        return;
+    }
+
+    for (int i = 0; i < QUEUE_NUM; i++) {
+        _pending_queues[i]->shutdown();
+    }
+
     _is_closed = true;
+
     _scheduler_pool->shutdown();
     _local_scan_thread_pool->shutdown();
     _remote_scan_thread_pool->shutdown();
-    // TODO: safely delete all objects and graceful exit
+
+    _scheduler_pool->wait();
+    _local_scan_thread_pool->join();
+    _remote_scan_thread_pool->join();
+
+    for (int i = 0; i < QUEUE_NUM; i++) {
+        delete _pending_queues[i];
+    }
+    delete[] _pending_queues;
 }
 
 Status ScannerScheduler::init(ExecEnv* env) {
@@ -52,14 +70,16 @@ Status ScannerScheduler::init(ExecEnv* env) {
     }
 
     // 2. local scan thread pool
-    _local_scan_thread_pool = new PriorityWorkStealingThreadPool(
+    _local_scan_thread_pool.reset(new PriorityWorkStealingThreadPool(
             config::doris_scanner_thread_pool_thread_num, env->store_paths().size(),
-            config::doris_scanner_thread_pool_queue_size);
+            config::doris_scanner_thread_pool_queue_size));
 
     // 3. remote scan thread pool
-    _remote_scan_thread_pool = new PriorityThreadPool(config::doris_scanner_thread_pool_thread_num,
-                                                      config::doris_scanner_thread_pool_queue_size);
+    _remote_scan_thread_pool.reset(
+            new PriorityThreadPool(config::doris_scanner_thread_pool_thread_num,
+                                   config::doris_scanner_thread_pool_queue_size));
 
+    _is_init = true;
     return Status::OK();
 }
 
@@ -98,17 +118,15 @@ void ScannerScheduler::_schedule_scanners(ScannerContext* ctx) {
     }
 
     std::list<VScanner*> this_run;
-    bool res = ctx->get_next_batch_of_scanners(&this_run);
+    ctx->get_next_batch_of_scanners(&this_run);
     if (this_run.empty()) {
-        if (!res) {
-            // This means we failed to choose scanners this time, and there may be no other scanners running.
-            // So we need to submit this ctx back to queue to be scheduled next time.
-            submit(ctx);
-        } else {
-            // No need to push back this ctx to reschedule
-            // There will be running scanners to push it back.
-            ctx->update_num_running(0, -1);
-        }
+        // There will be 2 cases when this_run is empty:
+        // 1. The blocks queue reaches limit.
+        //      The consumer will continue scheduling the ctx.
+        // 2. All scanners are running.
+        //      There running scanner will schedule the ctx after they are finished.
+        // So here we just return to stop scheduling ctx.
+        ctx->update_num_running(0, -1);
         return;
     }
 
@@ -165,9 +183,8 @@ void ScannerScheduler::_schedule_scanners(ScannerContext* ctx) {
 
 void ScannerScheduler::_scanner_scan(ScannerScheduler* scheduler, ScannerContext* ctx,
                                      VScanner* scanner) {
-    // TODO: rethink mem tracker and span
-    // START_AND_SCOPE_SPAN(scanner->runtime_state()->get_tracer(), span,
-    //                    "ScannerScheduler::_scanner_scan");
+    INIT_AND_SCOPE_REENTRANT_SPAN_IF(ctx->state()->enable_profile(), ctx->state()->get_tracer(),
+                                     ctx->scan_span(), "VScanner::scan");
     SCOPED_ATTACH_TASK(scanner->runtime_state());
 
     Thread::set_self_name("_scanner_scan");
@@ -205,26 +222,30 @@ void ScannerScheduler::_scanner_scan(ScannerScheduler* scheduler, ScannerContext
     bool get_free_block = true;
     int num_rows_in_block = 0;
 
+    // Only set to true when ctx->done() return true.
+    // Use this flag because we need distinguish eos from `should_stop`.
+    // If eos is true, we still need to return blocks,
+    // but is should_stop is true, no need to return blocks
+    bool should_stop = false;
     // Has to wait at least one full block, or it will cause a lot of schedule task in priority
     // queue, it will affect query latency and query concurrency for example ssb 3.3.
     while (!eos && raw_bytes_read < raw_bytes_threshold &&
            ((raw_rows_read < raw_rows_threshold && get_free_block) ||
             num_rows_in_block < state->batch_size())) {
         if (UNLIKELY(ctx->done())) {
-            eos = true;
-            status = Status::Cancelled("Cancelled");
-            LOG(INFO) << "Scan thread cancelled, cause query done, maybe reach limit.";
+            // No need to set status on error here.
+            // Because done() maybe caused by "should_stop"
+            should_stop = true;
             break;
         }
 
         auto block = ctx->get_free_block(&get_free_block);
         status = scanner->get_block(state, block, &eos);
-        VLOG_ROW << "VOlapScanNode input rows: " << block->rows();
+        VLOG_ROW << "VOlapScanNode input rows: " << block->rows() << ", eos: " << eos;
         if (!status.ok()) {
             LOG(WARNING) << "Scan thread read VOlapScanner failed: " << status.to_string();
             // Add block ptr in blocks, prevent mem leak in read failed
             blocks.push_back(block);
-            eos = true;
             break;
         }
 
@@ -249,15 +270,18 @@ void ScannerScheduler::_scanner_scan(ScannerScheduler* scheduler, ScannerContext
         ctx->set_status_on_error(status);
         eos = true;
         std::for_each(blocks.begin(), blocks.end(), std::default_delete<vectorized::Block>());
+    } else if (should_stop) {
+        // No need to return blocks because of should_stop, just delete them
+        std::for_each(blocks.begin(), blocks.end(), std::default_delete<vectorized::Block>());
     } else if (!blocks.empty()) {
         ctx->append_blocks_to_queue(blocks);
     }
 
-    if (eos) {
+    if (eos || should_stop) {
         scanner->mark_to_need_to_close();
     }
 
-    ctx->push_back_scanner_and_reschedule(scheduler, scanner);
+    ctx->push_back_scanner_and_reschedule(scanner);
 }
 
 } // namespace doris::vectorized

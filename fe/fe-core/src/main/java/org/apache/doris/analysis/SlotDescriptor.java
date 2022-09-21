@@ -168,6 +168,7 @@ public class SlotDescriptor {
         }
         for (Expr expr : sourceExprs) {
             if (!(expr instanceof SlotRef)) {
+                expr.materializeSrcExpr();
                 continue;
             }
             SlotRef slotRef = (SlotRef) expr;
@@ -345,10 +346,6 @@ public class SlotDescriptor {
 
     public boolean isScanSlot() {
         return parent.getTable() instanceof OlapTable;
-    }
-
-    public void setMaterialized(boolean materialized) {
-        isMaterialized = materialized;
     }
 
 }

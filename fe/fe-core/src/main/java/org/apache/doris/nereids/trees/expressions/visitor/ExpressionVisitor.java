@@ -24,6 +24,7 @@ import org.apache.doris.nereids.analyzer.UnboundStar;
 import org.apache.doris.nereids.trees.expressions.Add;
 import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.And;
+import org.apache.doris.nereids.trees.expressions.AssertNumRowsElement;
 import org.apache.doris.nereids.trees.expressions.Between;
 import org.apache.doris.nereids.trees.expressions.BinaryArithmetic;
 import org.apache.doris.nereids.trees.expressions.BinaryOperator;
@@ -58,8 +59,8 @@ import org.apache.doris.nereids.trees.expressions.SubqueryExpr;
 import org.apache.doris.nereids.trees.expressions.Subtract;
 import org.apache.doris.nereids.trees.expressions.TimestampArithmetic;
 import org.apache.doris.nereids.trees.expressions.WhenClause;
-import org.apache.doris.nereids.trees.expressions.functions.AggregateFunction;
 import org.apache.doris.nereids.trees.expressions.functions.BoundFunction;
+import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunction;
 import org.apache.doris.nereids.trees.expressions.literal.BigIntLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.BooleanLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.CharLiteral;
@@ -298,6 +299,10 @@ public abstract class ExpressionVisitor<R, C> {
 
     public R visitListQuery(ListQuery listQuery, C context) {
         return visitSubqueryExpr(listQuery, context);
+    }
+
+    public R visitAssertNumRowsElement(AssertNumRowsElement assertNumRowsElement, C context) {
+        return visit(assertNumRowsElement, context);
     }
 
     /* ********************************************************************************************

@@ -26,6 +26,8 @@ suite("test_array_load", "p0") {
         
         if (enable_vectorized_flag) {
             sql """ set enable_vectorized_engine = true """
+        } else {
+            sql """ set enable_vectorized_engine = false """
         }
 
         def result1 = sql """
@@ -122,6 +124,7 @@ suite("test_array_load", "p0") {
             set 'where', where_expr
             set 'fuzzy_parse', fuzzy_flag
             set 'column_separator', column_sep
+            set 'max_filter_ratio', '0.6'
             file file_name // import json file
             time 10000 // limit inflight 10s
 
@@ -134,7 +137,7 @@ suite("test_array_load", "p0") {
                 log.info("Stream load result: ${result}".toString())
                 def json = parseJson(result)
                 assertEquals("success", json.Status.toLowerCase())
-                assertEquals(json.NumberTotalRows, json.NumberLoadedRows + json.NumberUnselectedRows)
+                assertEquals(json.NumberTotalRows, json.NumberLoadedRows + json.NumberUnselectedRows + json.NumberFilteredRows)
                 assertTrue(json.NumberLoadedRows > 0 && json.LoadBytes > 0)
             }
         }

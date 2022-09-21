@@ -17,28 +17,25 @@
 
 package org.apache.doris.nereids.rules.exploration.join;
 
-import org.apache.doris.common.Pair;
-import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
-import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
-import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.util.ExpressionUtils;
-import org.apache.doris.nereids.util.Utils;
+import org.apache.doris.nereids.util.PlanUtils;
 
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
-
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Common function for JoinLAsscom
  */
-public class JoinLAsscomHelper {
+class JoinLAsscomHelper extends ThreeJoinHelper {
     /*
      *      topJoin                newTopJoin
      *      /     \                 /     \
@@ -46,213 +43,76 @@ public class JoinLAsscomHelper {
      *  /    \                  /    \
      * A      B                A      C
      */
-    private final LogicalJoin topJoin;
-    private final LogicalJoin<GroupPlan, GroupPlan> bottomJoin;
-    private final Plan a;
-    private final Plan b;
-    private final Plan c;
-
-    private final List<Expression> topHashJoinConjuncts;
-    private final List<Expression> bottomHashJoinConjuncts;
-    private final List<Expression> allNonHashJoinConjuncts = Lists.newArrayList();
-    private final List<SlotReference> aOutputSlots;
-    private final List<SlotReference> bOutputSlots;
-    private final List<SlotReference> cOutputSlots;
-
-    private final List<Expression> newBottomHashJoinConjuncts = Lists.newArrayList();
-    private final List<Expression> newBottomNonHashJoinConjuncts = Lists.newArrayList();
-
-    private final List<Expression> newTopHashJoinConjuncts = Lists.newArrayList();
-    private final List<Expression> newTopNonHashJoinConjuncts = Lists.newArrayList();
-
 
     /**
      * Init plan and output.
      */
     public JoinLAsscomHelper(LogicalJoin<? extends Plan, GroupPlan> topJoin,
             LogicalJoin<GroupPlan, GroupPlan> bottomJoin) {
-        this.topJoin = topJoin;
-        this.bottomJoin = bottomJoin;
-
-        a = bottomJoin.left();
-        b = bottomJoin.right();
-        c = topJoin.right();
-
-        Preconditions.checkArgument(!topJoin.getHashJoinConjuncts().isEmpty(),
-                "topJoin hashJoinConjuncts must exist.");
-        topHashJoinConjuncts = topJoin.getHashJoinConjuncts();
-        if (topJoin.getOtherJoinCondition().isPresent()) {
-            allNonHashJoinConjuncts.addAll(
-                    ExpressionUtils.extractConjunction(topJoin.getOtherJoinCondition().get()));
-        }
-        Preconditions.checkArgument(!bottomJoin.getHashJoinConjuncts().isEmpty(),
-                "bottomJoin onClause must exist.");
-        bottomHashJoinConjuncts = bottomJoin.getHashJoinConjuncts();
-        if (bottomJoin.getOtherJoinCondition().isPresent()) {
-            allNonHashJoinConjuncts.addAll(
-                    ExpressionUtils.extractConjunction(bottomJoin.getOtherJoinCondition().get()));
-        }
-
-        aOutputSlots = Utils.getOutputSlotReference(a);
-        bOutputSlots = Utils.getOutputSlotReference(b);
-        cOutputSlots = Utils.getOutputSlotReference(c);
-    }
-
-    public static JoinLAsscomHelper of(LogicalJoin<? extends Plan, GroupPlan> topJoin,
-            LogicalJoin<GroupPlan, GroupPlan> bottomJoin) {
-        return new JoinLAsscomHelper(topJoin, bottomJoin);
+        super(topJoin, bottomJoin, bottomJoin.left(), bottomJoin.right(), topJoin.right());
     }
 
     /**
-     * Get the onCondition of newTopJoin and newBottomJoin.
+     * Create newTopJoin.
      */
-    public boolean initJoinOnCondition() {
-        for (Expression topJoinOnClauseConjunct : topHashJoinConjuncts) {
-            // Ignore join with some OnClause like:
-            // Join C = B + A for above example.
-            List<SlotReference> topJoinUsedSlot = topJoinOnClauseConjunct.collect(SlotReference.class::isInstance);
-            if (ExpressionUtils.isIntersecting(topJoinUsedSlot, aOutputSlots)
-                    && ExpressionUtils.isIntersecting(topJoinUsedSlot, bOutputSlots)
-                    && ExpressionUtils.isIntersecting(topJoinUsedSlot, cOutputSlots)
-            ) {
-                return false;
-            }
+    public Plan newTopJoin() {
+        // Split bottomJoinProject into two part.
+        Map<Boolean, List<NamedExpression>> projectExprsMap = bottomProjects.stream()
+                .collect(Collectors.partitioningBy(projectExpr -> {
+                    Set<Slot> usedSlots = projectExpr.collect(Slot.class::isInstance);
+                    return bOutputSet.containsAll(usedSlots);
+                }));
+        List<NamedExpression> newLeftProjects = projectExprsMap.get(Boolean.FALSE);
+        List<NamedExpression> newRightProjects = projectExprsMap.get(Boolean.TRUE);
+
+        // Add all slots used by hashOnCondition when projects not empty.
+        // TODO: Does nonHashOnCondition also need to be considered.
+        Map<Boolean, List<Slot>> onUsedSlots = bottomJoin.getHashJoinConjuncts().stream()
+                .flatMap(onExpr -> {
+                    Set<Slot> usedSlotRefs = onExpr.collect(Slot.class::isInstance);
+                    return usedSlotRefs.stream();
+                }).collect(Collectors.partitioningBy(bOutputSet::contains));
+        List<Slot> leftUsedSlots = onUsedSlots.get(Boolean.FALSE);
+        List<Slot> rightUsedSlots = onUsedSlots.get(Boolean.TRUE);
+
+        addSlotsUsedByOn(rightUsedSlots, newRightProjects);
+        addSlotsUsedByOn(leftUsedSlots, newLeftProjects);
+
+        if (!newLeftProjects.isEmpty()) {
+            newLeftProjects.addAll(cOutputSet);
         }
+        LogicalJoin<GroupPlan, GroupPlan> newBottomJoin = new LogicalJoin<>(topJoin.getJoinType(),
+                newBottomHashJoinConjuncts, ExpressionUtils.optionalAnd(newBottomNonHashJoinConjuncts), a, c,
+                bottomJoin.getJoinReorderContext());
+        newBottomJoin.getJoinReorderContext().setHasLAsscom(false);
+        newBottomJoin.getJoinReorderContext().setHasCommute(false);
 
-        List<Expression> allHashJoinConjuncts = Lists.newArrayList();
-        allHashJoinConjuncts.addAll(topHashJoinConjuncts);
-        allHashJoinConjuncts.addAll(bottomHashJoinConjuncts);
+        Plan left = PlanUtils.projectOrSelf(newLeftProjects, newBottomJoin);
+        Plan right = PlanUtils.projectOrSelf(newRightProjects, b);
 
-        HashSet<SlotReference> newBottomJoinSlots = new HashSet<>(aOutputSlots);
-        newBottomJoinSlots.addAll(cOutputSlots);
-
-        for (Expression hashConjunct : allHashJoinConjuncts) {
-            List<SlotReference> slots = hashConjunct.collect(SlotReference.class::isInstance);
-            if (newBottomJoinSlots.containsAll(slots)) {
-                newBottomHashJoinConjuncts.add(hashConjunct);
-            } else {
-                newTopHashJoinConjuncts.add(hashConjunct);
-            }
-        }
-        for (Expression nonHashConjunct : allNonHashJoinConjuncts) {
-            List<SlotReference> slots = nonHashConjunct.collect(SlotReference.class::isInstance);
-            if (newBottomJoinSlots.containsAll(slots)) {
-                newBottomNonHashJoinConjuncts.add(nonHashConjunct);
-            } else {
-                newTopNonHashJoinConjuncts.add(nonHashConjunct);
-            }
-        }
-        // newBottomJoinOnCondition/newTopJoinOnCondition is empty. They are cross join.
-        // Example:
-        // A: col1, col2. B: col2, col3. C: col3, col4
-        // (A & B on A.col2=B.col2) & C on B.col3=C.col3.
-        // (A & B) & C -> (A & C) & B.
-        // (A & C) will be cross join (newBottomJoinOnCondition is empty)
-        if (newBottomHashJoinConjuncts.isEmpty() || newTopHashJoinConjuncts.isEmpty()) {
-            return false;
-        }
-
-        return true;
-    }
-
-
-    /**
-     * Get projectExpr of left and right.
-     * Just for project-inside.
-     */
-    private Pair<List<NamedExpression>, List<NamedExpression>> getProjectExprs() {
-        Preconditions.checkArgument(topJoin.left() instanceof LogicalProject);
-        LogicalProject project = (LogicalProject) topJoin.left();
-
-        List<NamedExpression> projectExprs = project.getProjects();
-        List<NamedExpression> newRightProjectExprs = Lists.newArrayList();
-        List<NamedExpression> newLeftProjectExpr = Lists.newArrayList();
-
-        HashSet<SlotReference> bOutputSlotsSet = new HashSet<>(bOutputSlots);
-        for (NamedExpression projectExpr : projectExprs) {
-            List<SlotReference> usedSlotRefs = projectExpr.collect(SlotReference.class::isInstance);
-            if (bOutputSlotsSet.containsAll(usedSlotRefs)) {
-                newRightProjectExprs.add(projectExpr);
-            } else {
-                newLeftProjectExpr.add(projectExpr);
-            }
-        }
-
-        return Pair.of(newLeftProjectExpr, newRightProjectExprs);
-    }
-
-
-    private LogicalJoin<GroupPlan, GroupPlan> newBottomJoin() {
-        Optional<Expression> bottomNonHashExpr;
-        if (newBottomNonHashJoinConjuncts.isEmpty()) {
-            bottomNonHashExpr = Optional.empty();
-        } else {
-            bottomNonHashExpr = Optional.of(ExpressionUtils.and(newBottomNonHashJoinConjuncts));
-        }
-        return new LogicalJoin(
-                bottomJoin.getJoinType(),
-                newBottomHashJoinConjuncts,
-                bottomNonHashExpr,
-                a, c);
-    }
-
-    /**
-     * Create topJoin for project-inside.
-     */
-    public LogicalJoin newProjectTopJoin() {
-        Plan left;
-        Plan right;
-
-        List<NamedExpression> newLeftProjectExpr = getProjectExprs().first;
-        List<NamedExpression> newRightProjectExprs = getProjectExprs().second;
-        if (!newLeftProjectExpr.isEmpty()) {
-            left = new LogicalProject<>(newLeftProjectExpr, newBottomJoin());
-        } else {
-            left = newBottomJoin();
-        }
-        if (!newRightProjectExprs.isEmpty()) {
-            right = new LogicalProject<>(newRightProjectExprs, b);
-        } else {
-            right = b;
-        }
-        Optional<Expression> topNonHashExpr;
-        if (newTopNonHashJoinConjuncts.isEmpty()) {
-            topNonHashExpr = Optional.empty();
-        } else {
-            topNonHashExpr = Optional.of(ExpressionUtils.and(newTopNonHashJoinConjuncts));
-        }
-        return new LogicalJoin<>(
-                topJoin.getJoinType(),
+        LogicalJoin<Plan, Plan> newTopJoin = new LogicalJoin<>(bottomJoin.getJoinType(),
                 newTopHashJoinConjuncts,
-                topNonHashExpr,
-                left, right);
+                ExpressionUtils.optionalAnd(newTopNonHashJoinConjuncts), left, right,
+                topJoin.getJoinReorderContext());
+        newTopJoin.getJoinReorderContext().setHasLAsscom(true);
+
+        if (topJoin.getLogicalProperties().equals(newTopJoin.getLogicalProperties())) {
+            return newTopJoin;
+        }
+
+        return PlanUtils.projectOrSelf(new ArrayList<>(topJoin.getOutput()), newTopJoin);
     }
 
-    /**
-     * Create topJoin for no-project-inside.
-     */
-    public LogicalJoin newTopJoin() {
-        // TODO: add column map (use project)
-        // SlotReference bind() may have solved this problem.
-        // source: | A       | B | C      |
-        // target: | A       | C      | B |
-        Optional<Expression> topNonHashExpr;
-        if (newTopNonHashJoinConjuncts.isEmpty()) {
-            topNonHashExpr = Optional.empty();
-        } else {
-            topNonHashExpr = Optional.of(ExpressionUtils.and(newTopNonHashJoinConjuncts));
+    // When project not empty, we add all slots used by hashOnCondition into projects.
+    private void addSlotsUsedByOn(List<Slot> usedSlots, List<NamedExpression> projects) {
+        if (projects.isEmpty()) {
+            return;
         }
-        return new LogicalJoin(
-                topJoin.getJoinType(),
-                newTopHashJoinConjuncts,
-                topNonHashExpr,
-                newBottomJoin(), b);
-    }
-
-    public static boolean check(LogicalJoin topJoin) {
-        if (topJoin.getJoinReorderContext().hasCommute()) {
-            return false;
-        }
-        return true;
+        Set<NamedExpression> projectsSet = new HashSet<>(projects);
+        usedSlots.forEach(slot -> {
+            if (!projectsSet.contains(slot)) {
+                projects.add(slot);
+            }
+        });
     }
 }

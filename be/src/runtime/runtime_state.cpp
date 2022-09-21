@@ -246,6 +246,11 @@ Status RuntimeState::init_mem_trackers(const TUniqueId& query_id) {
             -1, "RuntimeState:instance:" + print_id(_fragment_instance_id), _query_mem_tracker,
             &_profile);
 
+    if (_query_options.is_report_success) {
+        _query_mem_tracker->enable_print_log_usage();
+        _instance_mem_tracker->enable_print_log_usage();
+    }
+
     return Status::OK();
 }
 
@@ -438,6 +443,7 @@ void RuntimeState::export_load_error(const std::string& err_msg) {
 }
 
 int64_t RuntimeState::get_load_mem_limit() {
+    // TODO: the code is abandoned, it can be deleted after v1.3
     if (_query_options.__isset.load_mem_limit && _query_options.load_mem_limit > 0) {
         return _query_options.load_mem_limit;
     } else {

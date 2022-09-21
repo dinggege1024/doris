@@ -23,8 +23,6 @@ import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.trees.plans.Plan;
-import org.apache.doris.nereids.trees.plans.logical.LogicalRelation;
-import org.apache.doris.nereids.trees.plans.physical.PhysicalRelation;
 import org.apache.doris.statistics.StatsDeriveResult;
 
 import com.google.common.base.Preconditions;
@@ -142,6 +140,10 @@ public class GroupExpression {
         ruleMasks.set(rule.getRuleType().ordinal());
     }
 
+    public void setApplied(RuleType ruleType) {
+        ruleMasks.set(ruleType.ordinal());
+    }
+
     public void propagateApplied(GroupExpression toGroupExpression) {
         toGroupExpression.ruleMasks.or(ruleMasks);
     }
@@ -166,10 +168,8 @@ public class GroupExpression {
     /**
      * Add a (outputProperties) -> (cost, childrenInputProperties) in lowestCostTable.
      */
-    public boolean updateLowestCostTable(
-            PhysicalProperties outputProperties,
-            List<PhysicalProperties> childrenInputProperties,
-            double cost) {
+    public boolean updateLowestCostTable(PhysicalProperties outputProperties,
+            List<PhysicalProperties> childrenInputProperties, double cost) {
         if (lowestCostTable.containsKey(outputProperties)) {
             if (lowestCostTable.get(outputProperties).first > cost) {
                 lowestCostTable.put(outputProperties, Pair.of(cost, childrenInputProperties));
@@ -208,10 +208,8 @@ public class GroupExpression {
             return false;
         }
         GroupExpression that = (GroupExpression) o;
-        // if the plan is UnboundRelation or LogicalRelation or PhysicalRelation, this == that should be true,
-        // when if one relation appear in plan more than once,
-        // we cannot distinguish them throw equals function, since equals function cannot use output info.
-        if (plan instanceof UnboundRelation || plan instanceof LogicalRelation || plan instanceof PhysicalRelation) {
+        // TODO: add relation id to UnboundRelation
+        if (plan instanceof UnboundRelation) {
             return false;
         }
         return children.equals(that.children) && plan.equals(that.plan)

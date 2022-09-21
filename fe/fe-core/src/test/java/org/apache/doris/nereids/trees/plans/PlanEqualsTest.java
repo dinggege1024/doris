@@ -68,6 +68,21 @@ public class PlanEqualsTest {
                 new SlotReference(new ExprId(1), "b", BigIntType.INSTANCE, true, Lists.newArrayList())),
                 child);
         Assertions.assertNotEquals(unexpected, actual);
+
+        unexpected = new LogicalAggregate<>(Lists.newArrayList(), ImmutableList.of(
+                new SlotReference(new ExprId(1), "b", BigIntType.INSTANCE, true, Lists.newArrayList())),
+                true, false, true, AggPhase.GLOBAL, child);
+        Assertions.assertNotEquals(unexpected, actual);
+
+        unexpected = new LogicalAggregate<>(Lists.newArrayList(), ImmutableList.of(
+                new SlotReference(new ExprId(1), "b", BigIntType.INSTANCE, true, Lists.newArrayList())),
+                false, true, true, AggPhase.GLOBAL, child);
+        Assertions.assertNotEquals(unexpected, actual);
+
+        unexpected = new LogicalAggregate<>(Lists.newArrayList(), ImmutableList.of(
+                new SlotReference(new ExprId(1), "b", BigIntType.INSTANCE, true, Lists.newArrayList())),
+                false, false, true, AggPhase.LOCAL, child);
+        Assertions.assertNotEquals(unexpected, actual);
     }
 
     @Test
@@ -103,12 +118,12 @@ public class PlanEqualsTest {
 
     @Test
     public void testLogicalOlapScan() {
-        LogicalOlapScan actual = PlanConstructor.newLogicalOlapScan(0, "table", 0);
+        LogicalOlapScan actual = PlanConstructor.newLogicalOlapScanWithSameId(0, "table", 0);
 
-        LogicalOlapScan expected = PlanConstructor.newLogicalOlapScan(0, "table", 0);
+        LogicalOlapScan expected = PlanConstructor.newLogicalOlapScanWithSameId(0, "table", 0);
         Assertions.assertEquals(expected, actual);
 
-        LogicalOlapScan unexpected = PlanConstructor.newLogicalOlapScan(1, "table", 0);
+        LogicalOlapScan unexpected = PlanConstructor.newLogicalOlapScanWithSameId(1, "table", 0);
         Assertions.assertNotEquals(unexpected, actual);
     }
 
@@ -163,20 +178,20 @@ public class PlanEqualsTest {
         List<NamedExpression> outputExpressionList = ImmutableList.of(
                 new SlotReference(new ExprId(0), "a", BigIntType.INSTANCE, true, Lists.newArrayList()));
         PhysicalAggregate<Plan> actual = new PhysicalAggregate<>(Lists.newArrayList(), outputExpressionList,
-                Lists.newArrayList(), AggPhase.LOCAL, true, logicalProperties, child);
+                Lists.newArrayList(), AggPhase.LOCAL, true, true, logicalProperties, child);
 
         List<NamedExpression> outputExpressionList1 = ImmutableList.of(
                 new SlotReference(new ExprId(0), "a", BigIntType.INSTANCE, true, Lists.newArrayList()));
         PhysicalAggregate<Plan> expected = new PhysicalAggregate<>(Lists.newArrayList(),
                 outputExpressionList1,
-                Lists.newArrayList(), AggPhase.LOCAL, true, logicalProperties, child);
+                Lists.newArrayList(), AggPhase.LOCAL, true, true, logicalProperties, child);
         Assertions.assertEquals(expected, actual);
 
         List<NamedExpression> outputExpressionList2 = ImmutableList.of(
                 new SlotReference(new ExprId(0), "a", BigIntType.INSTANCE, true, Lists.newArrayList()));
         PhysicalAggregate<Plan> unexpected = new PhysicalAggregate<>(Lists.newArrayList(),
                 outputExpressionList2,
-                Lists.newArrayList(), AggPhase.LOCAL, false, logicalProperties, child);
+                Lists.newArrayList(), AggPhase.LOCAL, false, true, logicalProperties, child);
         Assertions.assertNotEquals(unexpected, actual);
     }
 
@@ -227,16 +242,18 @@ public class PlanEqualsTest {
             selectedTabletId.addAll(partition.getBaseIndex().getTabletIdsInOrder());
         }
 
-        PhysicalOlapScan actual = new PhysicalOlapScan(olapTable, Lists.newArrayList("a"), olapTable.getBaseIndexId(),
-                selectedTabletId, olapTable.getPartitionIds(), distributionSpecHash, Optional.empty(),
-                logicalProperties);
+        RelationId id = RelationId.createGenerator().getNextId();
 
-        PhysicalOlapScan expected = new PhysicalOlapScan(olapTable, Lists.newArrayList("a"),
+        PhysicalOlapScan actual = new PhysicalOlapScan(id, olapTable, Lists.newArrayList("a"),
+                olapTable.getBaseIndexId(), selectedTabletId, olapTable.getPartitionIds(), distributionSpecHash,
+                Optional.empty(), logicalProperties);
+
+        PhysicalOlapScan expected = new PhysicalOlapScan(id, olapTable, Lists.newArrayList("a"),
                 olapTable.getBaseIndexId(), selectedTabletId, olapTable.getPartitionIds(), distributionSpecHash,
                 Optional.empty(), logicalProperties);
         Assertions.assertEquals(expected, actual);
 
-        PhysicalOlapScan unexpected = new PhysicalOlapScan(olapTable, Lists.newArrayList("b"),
+        PhysicalOlapScan unexpected = new PhysicalOlapScan(id, olapTable, Lists.newArrayList("b"),
                 olapTable.getBaseIndexId(), selectedTabletId, olapTable.getPartitionIds(), distributionSpecHash,
                 Optional.empty(), logicalProperties);
         Assertions.assertNotEquals(unexpected, actual);

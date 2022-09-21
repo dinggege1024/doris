@@ -19,6 +19,7 @@ package org.apache.doris.nereids.trees.expressions;
 
 import org.apache.doris.analysis.ArithmeticExpr.Operator;
 import org.apache.doris.nereids.exceptions.UnboundException;
+import org.apache.doris.nereids.trees.expressions.functions.PropagateNullable;
 import org.apache.doris.nereids.trees.expressions.literal.IntervalLiteral.TimeUnit;
 import org.apache.doris.nereids.trees.expressions.shape.BinaryExpression;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
@@ -36,9 +37,10 @@ import java.util.List;
  * Describes the addition and subtraction of time units from timestamps.
  * Arithmetic expressions on timestamps are syntactic sugar.
  * They are executed as function call exprs in the BE.
+ * Example: '1996-01-01' + INTERVAL '3' month;
  * TODO: we need to rethink this, and maybe need to add a new type of Interval then implement IntervalLiteral as others
  */
-public class TimestampArithmetic extends Expression implements BinaryExpression {
+public class TimestampArithmetic extends Expression implements BinaryExpression, PropagateNullable {
     private static final Logger LOG = LogManager.getLogger(TimestampArithmetic.class);
     private final String funcName;
     private final boolean intervalFirst;

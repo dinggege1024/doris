@@ -155,8 +155,6 @@ public class Coordinator {
     // copied from TQueryExecRequest; constant across all fragments
     private final TDescriptorTable descTable;
 
-    private final Set<Long> alreadySentBackendIds = Sets.newHashSet();
-
     // Why do we use query global?
     // When `NOW()` function is in sql, we need only one now(),
     // but, we execute `NOW()` distributed.
@@ -265,7 +263,7 @@ public class Coordinator {
         this.nextInstanceId = new TUniqueId();
         nextInstanceId.setHi(queryId.hi);
         nextInstanceId.setLo(queryId.lo + 1);
-        this.assignedRuntimeFilters = analyzer.getAssignedRuntimeFilter();
+        this.assignedRuntimeFilters = planner.getRuntimeFilters();
     }
 
     // Used for broker load task/export task/update coordinator
@@ -396,7 +394,6 @@ public class Coordinator {
             }
             this.exportFiles.clear();
             this.needCheckBackendExecStates.clear();
-            this.alreadySentBackendIds.clear();
         } finally {
             lock.unlock();
         }
@@ -689,13 +686,14 @@ public class Coordinator {
         }
     }
 
-    private void waitRpc(List<Pair<BackendExecStates, Future<PExecPlanFragmentResult>>> futures, long timeoutMs,
+    private void waitRpc(List<Pair<BackendExecStates, Future<PExecPlanFragmentResult>>> futures, long leftTimeMs,
             String operation) throws RpcException, UserException {
-        if (timeoutMs <= 0) {
+        if (leftTimeMs <= 0) {
             throw new UserException("timeout before waiting for " + operation + " RPC. Elapse(sec): " + (
                     (System.currentTimeMillis() - timeoutDeadline) / 1000 + queryOptions.query_timeout));
         }
 
+        long timeoutMs = Math.min(leftTimeMs, Config.remote_fragment_exec_timeout_ms);
         for (Pair<BackendExecStates, Future<PExecPlanFragmentResult>> pair : futures) {
             TStatusCode code;
             String errMsg = null;
@@ -720,8 +718,7 @@ public class Coordinator {
                 code = TStatusCode.INTERNAL_ERROR;
             } catch (TimeoutException e) {
                 exception = e;
-                errMsg = "timeout when waiting for " + operation + " RPC. Elapse(sec): "
-                        + ((System.currentTimeMillis() - timeoutDeadline) / 1000 + queryOptions.query_timeout);
+                errMsg = "timeout when waiting for " + operation + " RPC. Wait(sec): " + timeoutMs / 1000;
                 code = TStatusCode.TIMEOUT;
             }
 
@@ -748,9 +745,6 @@ public class Coordinator {
             } finally {
                 pair.first.scopedSpan.endSpan();
             }
-
-            // succeed to send the plan fragment, update the "alreadySentBackendIds"
-            alreadySentBackendIds.add(pair.first.beId);
         }
     }
 
@@ -2081,15 +2075,11 @@ public class Coordinator {
          * This information can be obtained from the cache of BE.
          */
         public void unsetFields() {
-            if (alreadySentBackendIds.contains(backend.getId())) {
-                this.rpcParams.unsetDescTbl();
-                this.rpcParams.unsetCoord();
-                this.rpcParams.unsetQueryGlobals();
-                this.rpcParams.unsetResourceInfo();
-                this.rpcParams.setIsSimplifiedParam(true);
-            } else {
-                this.rpcParams.setIsSimplifiedParam(false);
-            }
+            this.rpcParams.unsetDescTbl();
+            this.rpcParams.unsetCoord();
+            this.rpcParams.unsetQueryGlobals();
+            this.rpcParams.unsetResourceInfo();
+            this.rpcParams.setIsSimplifiedParam(true);
         }
 
         // update profile.

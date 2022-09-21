@@ -17,32 +17,36 @@
 
 package org.apache.doris.nereids.rules.exploration.join;
 
+import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
-import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
+
+import java.util.List;
 
 /**
- * Common function for JoinCommute
+ * Join Commute Helper
  */
-public class JoinCommuteHelper {
-
+class JoinCommuteHelper {
     enum SwapType {
-        BOTTOM_JOIN, ZIG_ZAG, ALL
+        LEFT_DEEP, ZIG_ZAG, BUSHY
     }
 
-    private final boolean swapOuter;
-    private final SwapType swapType;
+    public static boolean check(SwapType swapType, LogicalJoin<GroupPlan, GroupPlan> join) {
+        if (swapType == SwapType.LEFT_DEEP && isNotBottomJoin(join)) {
+            return false;
+        }
 
-    public JoinCommuteHelper(boolean swapOuter, SwapType swapType) {
-        this.swapOuter = swapOuter;
-        this.swapType = swapType;
-    }
-
-    public static boolean check(LogicalJoin<GroupPlan, GroupPlan> join) {
         return !join.getJoinReorderContext().hasCommute() && !join.getJoinReorderContext().hasExchange();
     }
 
-    public static boolean check(LogicalProject<LogicalJoin<GroupPlan, GroupPlan>> project) {
-        return check(project.child());
+    public static boolean isNotBottomJoin(LogicalJoin<GroupPlan, GroupPlan> join) {
+        // TODO: tmp way to judge bottomJoin
+        return containJoin(join.left()) || containJoin(join.right());
+    }
+
+    private static boolean containJoin(GroupPlan groupPlan) {
+        // TODO: tmp way to judge containJoin
+        List<Slot> output = groupPlan.getOutput();
+        return !output.stream().map(Slot::getQualifier).allMatch(output.get(0).getQualifier()::equals);
     }
 }

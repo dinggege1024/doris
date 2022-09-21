@@ -160,7 +160,8 @@ public class StmtExecutor implements ProfileWriter {
 
     private static final AtomicLong STMT_ID_GENERATOR = new AtomicLong(0);
     private static final int MAX_DATA_TO_SEND_FOR_TXN = 100;
-
+    private static final String NULL_VALUE_FOR_LOAD = "\\N";
+    private final Object writeProfileLock = new Object();
     private ConnectContext context;
     private StatementContext statementContext;
     private MysqlSerializer serializer;
@@ -170,7 +171,6 @@ public class StmtExecutor implements ProfileWriter {
     private RuntimeProfile profile;
     private RuntimeProfile summaryProfile;
     private RuntimeProfile plannerRuntimeProfile;
-    private final Object writeProfileLock = new Object();
     private volatile boolean isFinishedProfile = false;
     private String queryType = "Query";
     private volatile Coordinator coord = null;
@@ -181,7 +181,6 @@ public class StmtExecutor implements ProfileWriter {
     private ShowResultSet proxyResultSet = null;
     private Data.PQueryStatistics.Builder statisticsForAuditLog;
     private boolean isCached;
-
     private QueryPlannerProfile plannerProfile = new QueryPlannerProfile();
 
     // this constructor is mainly for proxy
@@ -207,6 +206,21 @@ public class StmtExecutor implements ProfileWriter {
         this.isProxy = false;
         this.statementContext = new StatementContext(ctx, originStmt);
         this.statementContext.setParsedStatement(parsedStmt);
+    }
+
+    public static InternalService.PDataRow getRowStringValue(List<Expr> cols) {
+        if (cols.size() == 0) {
+            return null;
+        }
+        InternalService.PDataRow.Builder row = InternalService.PDataRow.newBuilder();
+        for (Expr expr : cols) {
+            if (expr instanceof NullLiteral) {
+                row.addColBuilder().setValue(NULL_VALUE_FOR_LOAD);
+            } else {
+                row.addColBuilder().setValue(expr.getStringValue());
+            }
+        }
+        return row.build();
     }
 
     public void setCoord(Coordinator coord) {
@@ -245,8 +259,12 @@ public class StmtExecutor implements ProfileWriter {
         plannerProfile.initRuntimeProfile(plannerRuntimeProfile);
 
         queryProfile.getCounterTotalTime().setValue(TimeUtils.getEstimatedTime(plannerProfile.getQueryBeginTime()));
-        if (coord != null) {
-            coord.endProfile(waiteBeReport);
+        endProfile(waiteBeReport);
+    }
+
+    private void endProfile(boolean waitProfileDone) {
+        if (context != null && context.getSessionVariable().enableProfile() && coord != null) {
+            coord.endProfile(waitProfileDone);
         }
     }
 
@@ -332,7 +350,7 @@ public class StmtExecutor implements ProfileWriter {
 
     /**
      * Used for audit in ConnectProcessor.
-     *
+     * <p>
      * TODO: There are three interface in StatementBase be called when doing audit:
      *      toDigest needAuditEncryption when parsedStmt is not a query
      *      and isValuesOrConstantSelect when parsedStmt is instance of InsertStmt.
@@ -342,7 +360,7 @@ public class StmtExecutor implements ProfileWriter {
      *      isValuesOrConstantSelect: when this interface return true, original string is truncated at 1024
      *
      * @return parsed and analyzed statement for Stale planner.
-     *          an unresolved LogicalPlan wrapped with a LogicalPlanAdapter for Nereids.
+     * an unresolved LogicalPlan wrapped with a LogicalPlanAdapter for Nereids.
      */
     public StatementBase getParsedStmt() {
         return parsedStmt;
@@ -466,6 +484,10 @@ public class StmtExecutor implements ProfileWriter {
                             throw e;
                         }
                     } finally {
+                        // The final profile report occurs after be returns the query data, and the profile cannot be
+                        // received after unregisterQuery(), causing the instance profile to be lost, so we should wait
+                        // for the profile before unregisterQuery().
+                        endProfile(true);
                         QeProcessorImpl.INSTANCE.unregisterQuery(context.queryId());
                     }
                 }
@@ -561,6 +583,7 @@ public class StmtExecutor implements ProfileWriter {
     /**
      * get variables in stmt.
      * TODO: only support select stmt now. need to support Nereids.
+     *
      * @throws DdlException
      */
     private void analyzeVariablesInStmt() throws DdlException {
@@ -889,7 +912,7 @@ public class StmtExecutor implements ProfileWriter {
     // the meta fields must be sent right before the first batch of data(or eos flag).
     // so if it has data(or eos is true), this method must return true.
     private boolean sendCachedValues(MysqlChannel channel, List<InternalService.PCacheValue> cacheValues,
-                                     SelectStmt selectStmt, boolean isSendFields, boolean isEos)
+            SelectStmt selectStmt, boolean isSendFields, boolean isEos)
             throws Exception {
         RowBatch batch = null;
         boolean isSend = isSendFields;
@@ -1115,7 +1138,7 @@ public class StmtExecutor implements ProfileWriter {
             plannerProfile.setQueryFetchResultFinishTime();
         } catch (Exception e) {
             fetchResultSpan.recordException(e);
-            throw  e;
+            throw e;
         } finally {
             fetchResultSpan.end();
         }
@@ -1323,23 +1346,6 @@ public class StmtExecutor implements ProfileWriter {
         executor.beginTransaction(request);
     }
 
-    private static final String NULL_VALUE_FOR_LOAD = "\\N";
-
-    public static InternalService.PDataRow getRowStringValue(List<Expr> cols) {
-        if (cols.size() == 0) {
-            return null;
-        }
-        InternalService.PDataRow.Builder row = InternalService.PDataRow.newBuilder();
-        for (Expr expr : cols) {
-            if (expr instanceof NullLiteral) {
-                row.addColBuilder().setValue(NULL_VALUE_FOR_LOAD);
-            } else {
-                row.addColBuilder().setValue(expr.getStringValue());
-            }
-        }
-        return row.build();
-    }
-
     // Process a select statement.
     private void handleInsertStmt() throws Exception {
         // Every time set no send flag and clean all data in buffer
@@ -1472,6 +1478,7 @@ public class StmtExecutor implements ProfileWriter {
                  */
                 throwable = t;
             } finally {
+                endProfile(true);
                 QeProcessorImpl.INSTANCE.unregisterQuery(context.queryId());
             }
 

@@ -24,12 +24,12 @@ import org.apache.doris.common.UserException;
 import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.glue.translator.PhysicalPlanTranslator;
 import org.apache.doris.nereids.glue.translator.PlanTranslatorContext;
+import org.apache.doris.nereids.jobs.batch.NereidsRewriteJobExecutor;
 import org.apache.doris.nereids.jobs.batch.OptimizeRulesJob;
-import org.apache.doris.nereids.jobs.batch.RewriteJob;
 import org.apache.doris.nereids.jobs.cascades.DeriveStatsJob;
 import org.apache.doris.nereids.memo.Group;
 import org.apache.doris.nereids.memo.GroupExpression;
-import org.apache.doris.nereids.processor.post.PlanPostprocessors;
+import org.apache.doris.nereids.processor.post.PlanPostProcessors;
 import org.apache.doris.nereids.processor.pre.PlanPreprocessors;
 import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
@@ -38,8 +38,10 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalPlan;
 import org.apache.doris.planner.PlanFragment;
 import org.apache.doris.planner.Planner;
+import org.apache.doris.planner.RuntimeFilter;
 import org.apache.doris.planner.ScanNode;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 
 import java.util.ArrayList;
@@ -70,7 +72,7 @@ public class NereidsPlanner extends Planner {
         PhysicalPlan physicalPlan = plan(logicalPlanAdapter.getLogicalPlan(), PhysicalProperties.ANY);
 
         PhysicalPlanTranslator physicalPlanTranslator = new PhysicalPlanTranslator();
-        PlanTranslatorContext planTranslatorContext = new PlanTranslatorContext();
+        PlanTranslatorContext planTranslatorContext = new PlanTranslatorContext(cascadesContext);
         PlanFragment root = physicalPlanTranslator.translatePlan(physicalPlan, planTranslatorContext);
 
         scanNodeList = planTranslatorContext.getScanNodes();
@@ -82,6 +84,15 @@ public class NereidsPlanner extends Planner {
         ArrayList<String> columnLabelList = physicalPlan.getOutput().stream().map(NamedExpression::getName)
                 .collect(Collectors.toCollection(ArrayList::new));
         logicalPlanAdapter.setColLabels(columnLabelList);
+    }
+
+    @VisibleForTesting
+    public void plan(StatementBase queryStmt) {
+        try {
+            plan(queryStmt, statementContext.getConnectContext().getSessionVariable().toThrift());
+        } catch (UserException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
@@ -111,13 +122,13 @@ public class NereidsPlanner extends Planner {
         // TODO: What is the appropriate time to set physical properties? Maybe before enter.
         // cascades style optimize phase.
 
-        // cost-based optimize and explode plan space
+        // cost-based optimize and explore plan space
         optimize();
 
         PhysicalPlan physicalPlan = chooseBestPlan(getRoot(), PhysicalProperties.ANY);
 
         // post-process physical plan out of memo, just for future use.
-        return postprocess(physicalPlan);
+        return postProcess(physicalPlan);
     }
 
     private LogicalPlan preprocess(LogicalPlan logicalPlan) {
@@ -136,7 +147,7 @@ public class NereidsPlanner extends Planner {
      * Logical plan rewrite based on a series of heuristic rules.
      */
     private void rewrite() {
-        new RewriteJob(cascadesContext).execute();
+        new NereidsRewriteJobExecutor(cascadesContext).execute();
     }
 
     private void deriveStats() {
@@ -153,8 +164,8 @@ public class NereidsPlanner extends Planner {
         new OptimizeRulesJob(cascadesContext).execute();
     }
 
-    private PhysicalPlan postprocess(PhysicalPlan physicalPlan) {
-        return new PlanPostprocessors(cascadesContext).process(physicalPlan);
+    private PhysicalPlan postProcess(PhysicalPlan physicalPlan) {
+        return new PlanPostProcessors(cascadesContext).process(physicalPlan);
     }
 
     @Override
@@ -181,11 +192,9 @@ public class NereidsPlanner extends Planner {
         if (!(plan instanceof PhysicalPlan)) {
             throw new AnalysisException("generate logical plan");
         }
-        PhysicalPlan physicalPlan = (PhysicalPlan) plan;
 
         // TODO: set (logical and physical)properties/statistics/... for physicalPlan.
-
-        return physicalPlan;
+        return ((PhysicalPlan) plan).withPhysicalProperties(groupExpression.getOutputProperties(physicalProperties));
     }
 
     @Override
@@ -201,5 +210,15 @@ public class NereidsPlanner extends Planner {
     @Override
     public void appendTupleInfo(StringBuilder str) {
         str.append(descTable.getExplainString());
+    }
+
+    @Override
+    public List<RuntimeFilter> getRuntimeFilters() {
+        return cascadesContext.getRuntimeFilterContext().getLegacyFilters();
+    }
+
+    @VisibleForTesting
+    public CascadesContext getCascadesContext() {
+        return cascadesContext;
     }
 }

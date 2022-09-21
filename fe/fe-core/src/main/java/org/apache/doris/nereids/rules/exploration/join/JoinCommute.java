@@ -17,7 +17,6 @@
 
 package org.apache.doris.nereids.rules.exploration.join;
 
-import org.apache.doris.nereids.annotation.Developing;
 import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.exploration.OneExplorationRuleFactory;
@@ -28,43 +27,35 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
 /**
  * Join Commute
  */
-@Developing
 public class JoinCommute extends OneExplorationRuleFactory {
 
-    public static final JoinCommute SWAP_OUTER_COMMUTE_BOTTOM_JOIN = new JoinCommute(true, SwapType.BOTTOM_JOIN);
-    public static final JoinCommute SWAP_OUTER_SWAP_ZIG_ZAG = new JoinCommute(true, SwapType.ZIG_ZAG);
+    public static final JoinCommute LEFT_DEEP = new JoinCommute(SwapType.LEFT_DEEP);
+    public static final JoinCommute ZIG_ZAG = new JoinCommute(SwapType.ZIG_ZAG);
+    public static final JoinCommute BUSHY = new JoinCommute(SwapType.BUSHY);
 
-    private final boolean swapOuter;
     private final SwapType swapType;
 
-    public JoinCommute(boolean swapOuter) {
-        this.swapOuter = swapOuter;
-        this.swapType = SwapType.ALL;
-    }
-
-    public JoinCommute(boolean swapOuter, SwapType swapType) {
-        this.swapOuter = swapOuter;
+    public JoinCommute(SwapType swapType) {
         this.swapType = swapType;
     }
 
     @Override
     public Rule build() {
-        return innerLogicalJoin().when(JoinCommuteHelper::check).then(join -> {
-            // TODO: add project for mapping column output.
-            // List<NamedExpression> newOutput = new ArrayList<>(join.getOutput());
-            LogicalJoin<GroupPlan, GroupPlan> newJoin = new LogicalJoin<>(
-                    join.getJoinType(),
-                    join.getHashJoinConjuncts(),
-                    join.getOtherJoinCondition(),
-                    join.right(), join.left(),
-                    join.getJoinReorderContext());
-            newJoin.getJoinReorderContext().setHasCommute(true);
-            // if (swapType == SwapType.ZIG_ZAG && !isBottomJoin(join)) {
-            //     newJoin.getJoinReorderContext().setHasCommuteZigZag(true);
-            // }
+        return logicalJoin()
+                .when(join -> JoinCommuteHelper.check(swapType, join))
+                .then(join -> {
+                    LogicalJoin<GroupPlan, GroupPlan> newJoin = new LogicalJoin<>(
+                            join.getJoinType().swap(),
+                            join.getHashJoinConjuncts(),
+                            join.getOtherJoinCondition(),
+                            join.right(), join.left(),
+                            join.getJoinReorderContext());
+                    newJoin.getJoinReorderContext().setHasCommute(true);
+                    if (swapType == SwapType.ZIG_ZAG && JoinCommuteHelper.isNotBottomJoin(join)) {
+                        newJoin.getJoinReorderContext().setHasCommuteZigZag(true);
+                    }
 
-            // LogicalProject<LogicalJoin> project = new LogicalProject<>(newOutput, newJoin);
-            return newJoin;
-        }).toRule(RuleType.LOGICAL_JOIN_COMMUTATIVE);
+                    return newJoin;
+                }).toRule(RuleType.LOGICAL_JOIN_COMMUTATE);
     }
 }

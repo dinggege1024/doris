@@ -35,7 +35,7 @@ public class DecimalType extends FractionalType {
 
     public static int MAX_PRECISION = 38;
     public static int MAX_SCALE = 38;
-    public static DecimalType SYSTEM_DEFAULT = new DecimalType(MAX_PRECISION, 18);
+    public static final DecimalType SYSTEM_DEFAULT = new DecimalType(MAX_PRECISION, 18);
 
     private static final DecimalType BOOLEAN_DECIMAL = new DecimalType(1, 0);
     private static final DecimalType TINYINT_DECIMAL = new DecimalType(3, 0);
@@ -45,6 +45,8 @@ public class DecimalType extends FractionalType {
     private static final DecimalType LARGEINT_DECIMAL = new DecimalType(38, 0);
     private static final DecimalType FLOAT_DECIMAL = new DecimalType(14, 7);
     private static final DecimalType DOUBLE_DECIMAL = new DecimalType(30, 15);
+
+    private static final int WIDTH = 16;
 
     private static final Map<DataType, DecimalType> FOR_TYPE_MAP = ImmutableMap.<DataType, DecimalType>builder()
             .put(TinyIntType.INSTANCE, TINYINT_DECIMAL)
@@ -160,5 +162,11 @@ public class DecimalType extends FractionalType {
     public int hashCode() {
         return Objects.hash(super.hashCode(), precision, scale);
     }
+
+    @Override
+    public int width() {
+        return WIDTH;
+    }
+
 }
 

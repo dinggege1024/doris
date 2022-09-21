@@ -838,7 +838,7 @@ The number of sliced tablets, plan the layout of the tablet, and avoid too many 
 
 * Type: string
 * Description: Limit the percentage of the server's maximum memory used by the BE process. It is used to prevent BE memory from occupying to many the machine's memory. This parameter must be greater than 0. When the percentage is greater than 100%, the value will default to 100%.
-* Default value: 80%
+* Default value: 90%
 
 ### `memory_limitation_per_thread_for_schema_change`
 
@@ -1218,7 +1218,8 @@ Shard size of StoragePageCache, the value must be power of two. It's recommended
 
 * Type: string
 
-* Description: data root path, separate by ';'.you can specify the storage medium of each root path, HDD or SSD. you can add capacity limit at the end of each root path, separate by ','
+* Description: data root path, separate by ';'.you can specify the storage medium of each root path, HDD or SSD. you can add capacity limit at the end of each root path, separate by ','.  
+  If the user does not use a mix of SSD and HDD disks, they do not need to configure the configuration methods in Example 1 and Example 2 below, but only need to specify the storage directory; they also do not need to modify the default storage media configuration of FE.  
 
     eg.1: `storage_root_path=/home/disk1/doris.HDD;/home/disk2/doris.SSD;/home/disk2/doris`
   
@@ -1578,7 +1579,7 @@ Translated with www.DeepL.com/Translator (free version)
 ### `enable_quick_compaction`
 * Type: bool
 * Description: enable quick compaction,It is mainly used in the scenario of frequent import of small amount of data. The problem of -235 can be effectively avoided by merging the imported versions in time through the mechanism of rapid compaction. The definition of small amount of data is currently defined according to the number of rows
-* Default: false
+* Default: true
 
 ### `quick_compaction_max_rows`
 * Type: int32

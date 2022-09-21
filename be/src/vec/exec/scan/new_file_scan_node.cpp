@@ -21,13 +21,16 @@
 #include "vec/exec/scan/new_file_arrow_scanner.h"
 #include "vec/exec/scan/new_file_text_scanner.h"
 #include "vec/exec/scan/new_olap_scanner.h"
+#include "vec/exec/scan/vfile_scanner.h"
 #include "vec/functions/in.h"
 
 namespace doris::vectorized {
 
 NewFileScanNode::NewFileScanNode(ObjectPool* pool, const TPlanNode& tnode,
                                  const DescriptorTbl& descs)
-        : VScanNode(pool, tnode, descs), _file_scan_node(tnode.file_scan_node) {
+        : VScanNode(pool, tnode, descs),
+          _pre_filter_texprs(tnode.file_scan_node.pre_filter_exprs),
+          _file_scan_node(tnode.file_scan_node) {
     _output_tuple_id = tnode.file_scan_node.tuple_id;
 }
 
@@ -58,6 +61,12 @@ void NewFileScanNode::set_scan_ranges(const std::vector<TScanRangeParams>& scan_
         }
         _scan_ranges.shrink_to_fit();
         LOG(INFO) << "Merge " << scan_ranges.size() << " scan ranges to " << _scan_ranges.size();
+    }
+    if (scan_ranges.size() > 0) {
+        _input_tuple_id =
+                scan_ranges[0].scan_range.ext_scan_range.file_scan_range.params.src_tuple_id;
+        _output_tuple_id =
+                scan_ranges[0].scan_range.ext_scan_range.file_scan_range.params.dest_tuple_id;
     }
 }
 
@@ -91,24 +100,34 @@ Status NewFileScanNode::_init_scanners(std::list<VScanner*>* scanners) {
 }
 
 VScanner* NewFileScanNode::_create_scanner(const TFileScanRange& scan_range) {
-    NewFileScanner* scanner = nullptr;
-    switch (scan_range.params.format_type) {
-    case TFileFormatType::FORMAT_PARQUET:
-        scanner = new NewFileParquetScanner(_state, this, _limit_per_scanner, scan_range,
-                                            _scanner_mem_tracker.get(), runtime_profile());
-        break;
-    case TFileFormatType::FORMAT_ORC:
-        scanner = new NewFileORCScanner(_state, this, _limit_per_scanner, scan_range,
-                                        _scanner_mem_tracker.get(), runtime_profile());
-        break;
+    VScanner* scanner = nullptr;
+    if (config::enable_new_file_scanner) {
+        scanner = new VFileScanner(_state, this, _limit_per_scanner, scan_range,
+                                   _scanner_mem_tracker.get(), runtime_profile(),
+                                   _pre_filter_texprs, scan_range.params.format_type);
+        ((VFileScanner*)scanner)->prepare(_vconjunct_ctx_ptr.get());
+    } else {
+        switch (scan_range.params.format_type) {
+        case TFileFormatType::FORMAT_PARQUET:
+            scanner = new NewFileParquetScanner(_state, this, _limit_per_scanner, scan_range,
+                                                _scanner_mem_tracker.get(), runtime_profile(),
+                                                _pre_filter_texprs);
+            break;
+        case TFileFormatType::FORMAT_ORC:
+            scanner = new NewFileORCScanner(_state, this, _limit_per_scanner, scan_range,
+                                            _scanner_mem_tracker.get(), runtime_profile(),
+                                            _pre_filter_texprs);
+            break;
 
-    default:
-        scanner = new NewFileTextScanner(_state, this, _limit_per_scanner, scan_range,
-                                         _scanner_mem_tracker.get(), runtime_profile());
-        break;
+        default:
+            scanner = new NewFileTextScanner(_state, this, _limit_per_scanner, scan_range,
+                                             _scanner_mem_tracker.get(), runtime_profile(),
+                                             _pre_filter_texprs);
+            break;
+        }
+        ((NewFileScanner*)scanner)->prepare(_vconjunct_ctx_ptr.get());
     }
     _scanner_pool.add(scanner);
-    scanner->prepare(_vconjunct_ctx_ptr.get());
     // TODO: Can we remove _conjunct_ctxs and use _vconjunct_ctx_ptr instead?
     scanner->reg_conjunct_ctxs(_conjunct_ctxs);
     return scanner;

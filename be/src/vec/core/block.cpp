@@ -30,8 +30,10 @@
 #include "runtime/tuple_row.h"
 #include "udf/udf.h"
 #include "util/block_compression.h"
+#include "util/faststring.h"
 #include "util/simd/bits.h"
 #include "vec/columns/column.h"
+#include "vec/columns/column_array.h"
 #include "vec/columns/column_const.h"
 #include "vec/columns/column_nullable.h"
 #include "vec/columns/column_string.h"
@@ -62,6 +64,10 @@ Block::Block(const std::vector<SlotDescriptor*>& slots, size_t block_size) {
 }
 
 Block::Block(const PBlock& pblock) {
+    CHECK(pblock.data_version() <= Block::max_data_version)
+            << "invalid pblock.data_version()=" << pblock.data_version()
+            << ", max_data_version=" << max_data_version;
+
     const char* buf = nullptr;
     std::string compression_scratch;
     if (pblock.compressed()) {
@@ -71,8 +77,8 @@ Block::Block(const PBlock& pblock) {
         size_t compressed_size = pblock.column_values().size();
         size_t uncompressed_size = 0;
         if (pblock.has_compression_type() && pblock.has_uncompressed_size()) {
-            std::unique_ptr<BlockCompressionCodec> codec;
-            get_block_compression_codec(pblock.compression_type(), codec);
+            BlockCompressionCodec* codec;
+            get_block_compression_codec(pblock.compression_type(), &codec);
             uncompressed_size = pblock.uncompressed_size();
             compression_scratch.resize(uncompressed_size);
             Slice decompressed_slice(compression_scratch);
@@ -96,7 +102,7 @@ Block::Block(const PBlock& pblock) {
     for (const auto& pcol_meta : pblock.column_metas()) {
         DataTypePtr type = DataTypeFactory::instance().create_data_type(pcol_meta);
         MutableColumnPtr data_column = type->create_column();
-        buf = type->deserialize(buf, data_column.get());
+        buf = type->deserialize(buf, data_column.get(), pblock.data_version());
         data.emplace_back(data_column->get_ptr(), type, pcol_meta.name());
     }
     initialize_index_by_name();
@@ -573,7 +579,6 @@ DataTypes Block::get_data_types() const {
 }
 
 void Block::clear() {
-    info = BlockInfo();
     data.clear();
     index_by_name.clear();
 }
@@ -587,15 +592,12 @@ void Block::clear_column_data(int column_size) noexcept {
         }
     }
     for (auto& d : data) {
-        if (UNLIKELY(d.column->use_count() != 1)) {
-            LOG(WARNING) << "Ref count of column is " << d.column->use_count();
-        }
+        DCHECK(d.column->use_count() == 1);
         (*std::move(d.column)).assume_mutable()->clear();
     }
 }
 
 void Block::swap(Block& other) noexcept {
-    std::swap(info, other.info);
     data.swap(other.data);
     index_by_name.swap(other.index_by_name);
 }
@@ -691,24 +693,30 @@ Status Block::filter_block(Block* block, int filter_column_id, int column_to_kee
     return Status::OK();
 }
 
-Status Block::serialize(PBlock* pblock, size_t* uncompressed_bytes, size_t* compressed_bytes,
-                        segment_v2::CompressionTypePB compression_type,
+Status Block::serialize(PBlock* pblock,
+                        /*std::string* compressed_buffer,*/ size_t* uncompressed_bytes,
+                        size_t* compressed_bytes, segment_v2::CompressionTypePB compression_type,
                         bool allow_transfer_large_data) const {
+    CHECK(config::block_data_version <= Block::max_data_version)
+            << "invalid config::block_data_version=" << config::block_data_version
+            << ", max_data_version=" << max_data_version;
+    pblock->set_data_version(config::block_data_version);
+
     // calc uncompressed size for allocation
     size_t content_uncompressed_size = 0;
     for (const auto& c : *this) {
         PColumnMeta* pcm = pblock->add_column_metas();
         c.to_pb_column_meta(pcm);
         // get serialized size
-        content_uncompressed_size += c.type->get_uncompressed_serialized_bytes(*(c.column));
+        content_uncompressed_size +=
+                c.type->get_uncompressed_serialized_bytes(*(c.column), config::block_data_version);
     }
 
     // serialize data values
     // when data type is HLL, content_uncompressed_size maybe larger than real size.
-    std::string* column_values = nullptr;
+    std::string column_values;
     try {
-        column_values = pblock->mutable_column_values();
-        column_values->resize(content_uncompressed_size);
+        column_values.resize(content_uncompressed_size);
     } catch (...) {
         std::exception_ptr p = std::current_exception();
         std::string msg = fmt::format(
@@ -717,48 +725,32 @@ Status Block::serialize(PBlock* pblock, size_t* uncompressed_bytes, size_t* comp
         LOG(WARNING) << msg;
         return Status::BufferAllocFailed(msg);
     }
-    char* buf = column_values->data();
+    char* buf = column_values.data();
 
     for (const auto& c : *this) {
-        buf = c.type->serialize(*(c.column), buf);
+        buf = c.type->serialize(*(c.column), buf, config::block_data_version);
     }
     *uncompressed_bytes = content_uncompressed_size;
 
     // compress
     if (config::compress_rowbatches && content_uncompressed_size > 0) {
-        SCOPED_RAW_TIMER(const_cast<int64_t*>(&_compress_time_ns));
+        SCOPED_RAW_TIMER(&_compress_time_ns);
         pblock->set_compression_type(compression_type);
         pblock->set_uncompressed_size(content_uncompressed_size);
 
-        std::unique_ptr<BlockCompressionCodec> codec;
-        RETURN_IF_ERROR(get_block_compression_codec(compression_type, codec));
+        BlockCompressionCodec* codec;
+        RETURN_IF_ERROR(get_block_compression_codec(compression_type, &codec));
 
-        size_t max_compressed_size = codec->max_compressed_len(content_uncompressed_size);
-        std::string compression_scratch;
-        try {
-            // Try compressing the content to compression_scratch,
-            // swap if compressed data is smaller
-            // Allocation of extra-long contiguous memory may fail, and data compression cannot be used if it fails
-            compression_scratch.resize(max_compressed_size);
-        } catch (...) {
-            std::exception_ptr p = std::current_exception();
-            std::string msg =
-                    fmt::format("Try to alloc {} bytes for compression scratch failed. reason {}",
-                                max_compressed_size, p ? p.__cxa_exception_type()->name() : "null");
-            LOG(WARNING) << msg;
-            return Status::BufferAllocFailed(msg);
-        }
-
-        Slice compressed_slice(compression_scratch);
-        codec->compress(Slice(column_values->data(), content_uncompressed_size), &compressed_slice);
-        size_t compressed_size = compressed_slice.size;
+        faststring buf_compressed;
+        codec->compress(Slice(column_values.data(), content_uncompressed_size), &buf_compressed);
+        size_t compressed_size = buf_compressed.size();
 
         if (LIKELY(compressed_size < content_uncompressed_size)) {
-            compression_scratch.resize(compressed_size);
-            column_values->swap(compression_scratch);
+            pblock->set_column_values(buf_compressed.data(), buf_compressed.size());
             pblock->set_compressed(true);
             *compressed_bytes = compressed_size;
         } else {
+            pblock->set_column_values(std::move(column_values));
             *compressed_bytes = content_uncompressed_size;
         }
 
@@ -1058,25 +1050,12 @@ std::unique_ptr<Block> Block::create_same_struct_block(size_t size) const {
 void Block::shrink_char_type_column_suffix_zero(const std::vector<size_t>& char_type_idx) {
     for (auto idx : char_type_idx) {
         if (idx < data.size()) {
-            if (this->get_by_position(idx).column->is_nullable()) {
-                this->get_by_position(idx).column = ColumnNullable::create(
-                        reinterpret_cast<const ColumnString*>(
-                                reinterpret_cast<const ColumnNullable*>(
-                                        this->get_by_position(idx).column.get())
-                                        ->get_nested_column_ptr()
-                                        .get())
-                                ->get_shinked_column(),
-                        reinterpret_cast<const ColumnNullable*>(
-                                this->get_by_position(idx).column.get())
-                                ->get_null_map_column_ptr());
-            } else {
-                this->get_by_position(idx).column = reinterpret_cast<const ColumnString*>(
-                                                            this->get_by_position(idx).column.get())
-                                                            ->get_shinked_column();
-            }
+            auto& col_and_name = this->get_by_position(idx);
+            col_and_name.column = col_and_name.column->assume_mutable()->get_shinked_column();
         }
     }
 }
+
 size_t MutableBlock::allocated_bytes() const {
     size_t res = 0;
     for (const auto& col : _columns) {

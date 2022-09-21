@@ -40,7 +40,6 @@ import java.util.Optional;
 public class LogicalFilter<CHILD_TYPE extends Plan> extends LogicalUnary<CHILD_TYPE> implements Filter {
     private final Expression predicates;
 
-
     public LogicalFilter(Expression predicates, CHILD_TYPE child) {
         this(predicates, Optional.empty(), Optional.empty(), child);
     }
@@ -90,7 +89,7 @@ public class LogicalFilter<CHILD_TYPE extends Plan> extends LogicalUnary<CHILD_T
     }
 
     @Override
-    public List<Expression> getExpressions() {
+    public List<? extends Expression> getExpressions() {
         return ImmutableList.of(predicates);
     }
 
@@ -102,7 +101,7 @@ public class LogicalFilter<CHILD_TYPE extends Plan> extends LogicalUnary<CHILD_T
 
     @Override
     public Plan withGroupExpression(Optional<GroupExpression> groupExpression) {
-        return new LogicalFilter<>(predicates, groupExpression, Optional.of(logicalProperties), child());
+        return new LogicalFilter<>(predicates, groupExpression, Optional.of(getLogicalProperties()), child());
     }
 
     @Override

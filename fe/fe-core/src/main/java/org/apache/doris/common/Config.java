@@ -1695,7 +1695,7 @@ public class Config extends ConfigBase {
      * Should be removed when this feature is ready.
      */
     @ConfField(mutable = false, masterOnly = true)
-    public static boolean enable_multi_catalog = false; // 1 min
+    public static boolean enable_multi_catalog = false;
 
     @ConfField(mutable = true, masterOnly = false)
     public static long file_scan_node_split_size = 256 * 1024 * 1024; // 256mb
@@ -1753,4 +1753,18 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = true)
     public static boolean enable_new_es_dsl = true;
+
+    /**
+     * The timeout of executing async remote fragment.
+     * In normal case, the async remote fragment will be executed in a short time. If system are under high load
+     * condition，try to set this timeout longer.
+     */
+    @ConfField(mutable = true)
+    public static long remote_fragment_exec_timeout_ms = 5000; // 5 sec
+
+    /**
+     * Temp config, should be removed when new file scan node is ready.
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_new_load_scan_node = false;
 }

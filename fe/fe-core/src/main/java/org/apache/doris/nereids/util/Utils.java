@@ -17,15 +17,19 @@
 
 package org.apache.doris.nereids.util;
 
+import org.apache.doris.nereids.exceptions.AnalysisException;
+import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
-import org.apache.doris.nereids.trees.plans.Plan;
+import org.apache.doris.nereids.trees.expressions.shape.BinaryExpression;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -101,7 +105,6 @@ public class Utils {
         return StringUtils.join(qualifiedNameParts(qualifier, name), ".");
     }
 
-
     /**
      * equals for List but ignore order.
      */
@@ -110,15 +113,6 @@ public class Utils {
             return false;
         }
         return new HashSet<>(one).containsAll(other) && new HashSet<>(other).containsAll(one);
-    }
-
-    /**
-     * Get SlotReference from output of plam.
-     * Warning, plan must have bound, because exists Slot Cast to SlotReference.
-     */
-    public static List<SlotReference> getOutputSlotReference(Plan plan) {
-        return plan.getOutput().stream().map(SlotReference.class::cast)
-                .collect(Collectors.toList());
     }
 
     /**
@@ -145,5 +139,59 @@ public class Utils {
         }
 
         return stringBuilder.append(" )").toString();
+    }
+
+    /**
+     * See if there are correlated columns in a subquery expression.
+     */
+    public static boolean containCorrelatedSlot(List<Expression> correlatedSlots, Expression expr) {
+        if (correlatedSlots.isEmpty() || expr == null) {
+            return false;
+        }
+        if (expr instanceof SlotReference) {
+            return correlatedSlots.contains(expr);
+        }
+        for (Expression child : expr.children()) {
+            if (containCorrelatedSlot(correlatedSlots, child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get the correlated columns that belong to the subquery,
+     * that is, the correlated columns that can be resolved within the subquery.
+     * eg:
+     * select * from t1 where t1.a = (select sum(t2.b) from t2 where t1.c = t2.d));
+     * correlatedPredicates : t1.c = t2.d
+     * correlatedSlots : t1.c
+     * return t2.d
+     */
+    public static List<Expression> getCorrelatedSlots(List<Expression> correlatedPredicates,
+            List<Expression> correlatedSlots) {
+        List<Expression> slots = new ArrayList<>();
+        correlatedPredicates.stream().forEach(predicate -> {
+            if (!(predicate instanceof BinaryExpression)) {
+                throw new AnalysisException("UnSupported expr type: " + correlatedPredicates);
+            }
+            BinaryExpression binaryExpression = (BinaryExpression) predicate;
+            if (binaryExpression.left().anyMatch(correlatedSlots::contains)) {
+                if (binaryExpression.right() instanceof SlotReference) {
+                    slots.add(binaryExpression.right());
+                }
+            } else {
+                if (binaryExpression.left() instanceof SlotReference) {
+                    slots.add(binaryExpression.left());
+                }
+            }
+        });
+        return slots;
+    }
+
+    public static Map<Boolean, List<Expression>> splitCorrelatedConjuncts(
+            List<Expression> conjuncts, List<Expression> slots) {
+        return conjuncts.stream().collect(Collectors.partitioningBy(
+                expr -> expr.anyMatch(slots::contains)));
     }
 }
