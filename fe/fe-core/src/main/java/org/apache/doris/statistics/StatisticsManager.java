@@ -19,13 +19,14 @@ package org.apache.doris.statistics;
 
 import org.apache.doris.analysis.AlterColumnStatsStmt;
 import org.apache.doris.analysis.AlterTableStatsStmt;
-import org.apache.doris.analysis.ShowColumnStatsStmt;
+import org.apache.doris.analysis.DropTableStatsStmt;
 import org.apache.doris.analysis.ShowTableStatsStmt;
 import org.apache.doris.analysis.TableName;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
@@ -44,6 +45,7 @@ import org.apache.commons.lang3.math.NumberUtils;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class StatisticsManager {
 
@@ -55,6 +57,27 @@ public class StatisticsManager {
 
     public Statistics getStatistics() {
         return statistics;
+    }
+
+    /**
+     * Support for deleting table or partition statistics.
+     *
+     * @param stmt get table name and partition name from it.
+     */
+    public void dropStats(DropTableStatsStmt stmt) {
+        Map<Long, Set<String>> tblIdToPartition = stmt.getTblIdToPartition();
+
+        if (tblIdToPartition != null && !tblIdToPartition.isEmpty()) {
+            tblIdToPartition.forEach((tableId, partitions) -> {
+                if (partitions == null || partitions.isEmpty()) {
+                    statistics.dropTableStats(tableId);
+                } else {
+                    for (String partition : partitions) {
+                        statistics.dropPartitionStats(tableId, partition);
+                    }
+                }
+            });
+        }
     }
 
     /**
@@ -91,7 +114,8 @@ public class StatisticsManager {
         List<String> partitionNames = stmt.getPartitionNames();
         Map<StatsType, String> statsTypeToValue = stmt.getStatsTypeToValue();
 
-        if ((partitionNames.isEmpty()) && table.isPartitioned()) {
+        if ((partitionNames.isEmpty()) && table instanceof OlapTable
+                && !((OlapTable) table).getPartitionInfo().getType().equals(PartitionType.UNPARTITIONED)) {
             throw new AnalysisException("Partitioned table must specify partition name.");
         }
 
@@ -272,41 +296,6 @@ public class StatisticsManager {
         return result;
     }
 
-    /**
-     * Get the column statistics of a table. if specified partition name,
-     * get the column statistics of the partition.
-     *
-     * @param stmt statement
-     * @return column statistics for  a partition or table
-     * @throws AnalysisException statistics not exist
-     */
-    public List<List<String>> showColumnStatsList(ShowColumnStatsStmt stmt) throws AnalysisException {
-        TableName tableName = stmt.getTableName();
-        List<String> partitionNames = stmt.getPartitionNames();
-
-        // check meta
-        Table table = validateTableName(tableName);
-
-        // check priv
-        if (!Env.getCurrentEnv().getAuth()
-                .checkTblPriv(ConnectContext.get(), tableName.getDb(), tableName.getTbl(), PrivPredicate.SHOW)) {
-            ErrorReport.reportAnalysisException(ErrorCode.ERR_TABLEACCESS_DENIED_ERROR, "SHOW CREATE TABLE",
-                    ConnectContext.get().getQualifiedUser(), ConnectContext.get().getRemoteIP(),
-                    tableName.getDb() + ": " + tableName.getTbl());
-        }
-
-        if (partitionNames.isEmpty()) {
-            return showColumnStats(table.getId());
-        }
-
-        List<List<String>> result = Lists.newArrayList();
-        for (String partitionName : partitionNames) {
-            validatePartitionName(table, partitionName);
-            result.addAll(showColumnStats(table.getId(), partitionName));
-        }
-        return result;
-    }
-
     private List<String> showTableStats(Table table) throws AnalysisException {
         TableStats tableStats = statistics.getTableStats(table.getId());
         if (tableStats == null) {
@@ -332,7 +321,7 @@ public class StatisticsManager {
 
     private List<List<String>> showColumnStats(long tableId) throws AnalysisException {
         List<List<String>> result = Lists.newArrayList();
-        Map<String, ColumnStats> columnStats = statistics.getColumnStats(tableId);
+        Map<String, ColumnStat> columnStats = statistics.getColumnStats(tableId);
         columnStats.forEach((key, stats) -> {
             List<String> row = Lists.newArrayList();
             row.add(key);
@@ -344,7 +333,7 @@ public class StatisticsManager {
 
     private List<List<String>> showColumnStats(long tableId, String partitionName) throws AnalysisException {
         List<List<String>> result = Lists.newArrayList();
-        Map<String, ColumnStats> columnStats = statistics.getColumnStats(tableId, partitionName);
+        Map<String, ColumnStat> columnStats = statistics.getColumnStats(tableId, partitionName);
         columnStats.forEach((key, stats) -> {
             List<String> row = Lists.newArrayList();
             row.add(key);
@@ -455,14 +444,6 @@ public class StatisticsManager {
 
         if (!Strings.isNullOrEmpty(result.getColumnName())) {
             validateColumn(table, result.getColumnName());
-        }
-
-        if (result.getCategory() == null) {
-            throw new AnalysisException("Category is null.");
-        }
-
-        if (result.getGranularity() == null) {
-            throw new AnalysisException("Granularity is null.");
         }
 
         Map<StatsType, String> statsTypeToValue = result.getStatsTypeToValue();

@@ -22,9 +22,9 @@
 #include "vec/runtime/vparquet_writer.h"
 #include "vec/sink/vresult_sink.h"
 
-namespace doris {
+namespace doris::vectorized {
+class VFileWriterWrapper;
 
-namespace vectorized {
 // write result to file
 class VFileResultWriter final : public VResultWriter {
 public:
@@ -52,7 +52,7 @@ public:
     Status write_csv_header();
 
 private:
-    Status _write_parquet_file(const Block& block);
+    Status _write_file(const Block& block);
     Status _write_csv_file(const Block& block);
 
     // if buffer exceed the limit, write the data buffered in _plain_text_outstream via file_writer
@@ -70,7 +70,7 @@ private:
     std::string _file_format_to_name();
     // close file writer, and if !done, it will create new writer for next file.
     // if only_close is true, this method will just close the file writer and return.
-    Status _close_file_writer(bool done);
+    Status _close_file_writer(bool done, bool only_close = false);
     // create a new file if current file size exceed limit
     Status _create_new_file_if_exceed_size();
     // send the final statistic result
@@ -91,7 +91,7 @@ private:
     // TODO(cmy): I simply use a stringstrteam to buffer the data, to avoid calling
     // file writer's write() for every single row.
     // But this cannot solve the problem of a row of data that is too large.
-    // For example: bitmap_to_string() may return large volumn of data.
+    // For example: bitmap_to_string() may return large volume of data.
     // And the speed is relative low, in my test, is about 6.5MB/s.
     std::stringstream _plain_text_outstream;
     static const size_t OUTSTREAM_BUFFER_SIZE_BYTES;
@@ -122,8 +122,7 @@ private:
     bool _is_result_sent = false;
     bool _header_sent = false;
     RowDescriptor _output_row_descriptor;
-    // parquet file writer
-    std::unique_ptr<VParquetWriterWrapper> _vparquet_writer;
+    // parquet/orc file writer
+    std::unique_ptr<VFileWriterWrapper> _vfile_writer;
 };
-} // namespace vectorized
-} // namespace doris
+} // namespace doris::vectorized

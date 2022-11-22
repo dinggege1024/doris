@@ -103,7 +103,8 @@ enum TSchemaTableType {
     SCH_VARIABLES,
     SCH_VIEWS,
     SCH_INVALID,
-    SCH_ROWSETS
+    SCH_ROWSETS,
+    SCH_BACKENDS
 }
 
 enum THdfsCompression {
@@ -117,7 +118,9 @@ enum THdfsCompression {
 }
 
 enum TIndexType {
-  BITMAP
+  BITMAP,
+  INVERTED,
+  BLOOMFILTER
 }
 
 // Mapping from names defined by Avro to the enum.
@@ -175,7 +178,7 @@ struct TOlapTableIndexSchema {
     1: required i64 id
     2: required list<string> columns
     3: required i32 schema_hash
-    4: required list<TColumn> columns_desc
+    4: optional list<TColumn> columns_desc
 }
 
 struct TOlapTableSchemaParam {
@@ -194,6 +197,8 @@ struct TOlapTableIndex {
   2: optional list<string> columns
   3: optional TIndexType index_type
   4: optional string comment
+  5: optional i64 index_id
+  6: optional map<string, string> properties
 }
 
 struct TTabletLocation {

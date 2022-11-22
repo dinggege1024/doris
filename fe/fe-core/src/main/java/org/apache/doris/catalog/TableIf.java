@@ -20,9 +20,14 @@ package org.apache.doris.catalog;
 import org.apache.doris.alter.AlterCancelException;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.MetaNotFoundException;
+import org.apache.doris.statistics.AnalysisJob;
+import org.apache.doris.statistics.AnalysisJobInfo;
+import org.apache.doris.statistics.AnalysisJobScheduler;
 import org.apache.doris.thrift.TTableDescriptor;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public interface TableIf {
@@ -73,6 +78,17 @@ public interface TableIf {
 
     Column getColumn(String name);
 
+    default int getBaseColumnIdxByName(String colName) {
+        int i = 0;
+        for (Column col : getBaseSchema()) {
+            if (col.getName().equalsIgnoreCase(colName)) {
+                return i;
+            }
+            ++i;
+        }
+        return -1;
+    }
+
     String getMysqlType();
 
     String getEngine();
@@ -94,6 +110,8 @@ public interface TableIf {
     String getComment(boolean escapeQuota);
 
     TTableDescriptor toThrift();
+
+    AnalysisJob createAnalysisJob(AnalysisJobScheduler scheduler, AnalysisJobInfo info);
 
     /**
      * Doris table type.
@@ -162,4 +180,17 @@ public interface TableIf {
             }
         }
     }
+
+    default List<Column> getColumns() {
+        return Collections.emptyList();
+    }
+
+    default Set<String> getPartitionNames() {
+        return Collections.emptySet();
+    }
+
+    default Partition getPartition(String name) {
+        return null;
+    }
 }
+

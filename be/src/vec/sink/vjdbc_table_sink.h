@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 #pragma once
-#ifdef LIBJVM
 #include "common/status.h"
 #include "vec/exec/vjdbc_connector.h"
 #include "vec/sink/vtable_sink.h"
@@ -40,7 +39,8 @@ public:
 private:
     JdbcConnectorParam _jdbc_param;
     std::unique_ptr<JdbcConnector> _writer;
+    //if is ORACLE and date type, insert into need convert
+    bool _need_extra_convert = false;
 };
 } // namespace vectorized
 } // namespace doris
-#endif

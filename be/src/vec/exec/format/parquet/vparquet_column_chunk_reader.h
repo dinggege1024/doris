@@ -29,8 +29,6 @@
 #include "parquet_common.h"
 #include "schema_desc.h"
 #include "util/block_compression.h"
-#include "vec/columns/column_array.h"
-#include "vec/columns/column_nullable.h"
 #include "vparquet_page_reader.h"
 
 namespace doris::vectorized {
@@ -57,6 +55,15 @@ namespace doris::vectorized {
  */
 class ColumnChunkReader {
 public:
+    struct Statistics {
+        int64_t decompress_time = 0;
+        int64_t decompress_cnt = 0;
+        int64_t decode_header_time = 0;
+        int64_t decode_value_time = 0;
+        int64_t decode_dict_time = 0;
+        int64_t decode_level_time = 0;
+    };
+
     ColumnChunkReader(BufferedStreamReader* reader, tparquet::ColumnChunk* column_chunk,
                       FieldSchema* field_schema, cctz::time_zone* ctz);
     ~ColumnChunkReader() = default;
@@ -96,7 +103,7 @@ public:
     // Load page data into the underlying container,
     // and initialize the repetition and definition level decoder for current page data.
     Status load_page_data();
-    Status load_page_date_idempotent() {
+    Status load_page_data_idempotent() {
         if (_state == DATA_LOADED) {
             return Status::OK();
         }
@@ -106,7 +113,6 @@ public:
     uint32_t remaining_num_values() const { return _remaining_num_values; };
     // null values are generated from definition levels
     // the caller should maintain the consistency after analyzing null values from definition levels.
-    void insert_null_values(ColumnPtr& doris_column, size_t num_values);
     void insert_null_values(MutableColumnPtr& doris_column, size_t num_values);
     // Get the raw data of current page.
     Slice& get_page_data() { return _page_data; }
@@ -117,8 +123,8 @@ public:
     size_t get_def_levels(level_t* levels, size_t n);
 
     // Decode values in current page into doris column.
-    Status decode_values(ColumnPtr& doris_column, DataTypePtr& data_type, size_t num_values);
-    Status decode_values(MutableColumnPtr& doris_column, DataTypePtr& data_type, size_t num_values);
+    Status decode_values(MutableColumnPtr& doris_column, DataTypePtr& data_type,
+                         ColumnSelectVector& select_vector);
 
     // Get the repetition level decoder of current page.
     LevelDecoder& rep_level_decoder() { return _rep_level_decoder; }
@@ -130,6 +136,11 @@ public:
 
     // Get page decoder
     Decoder* get_page_decoder() { return _page_decoder; }
+
+    Statistics& statistics() {
+        _statistics.decode_header_time = _page_reader->statistics().decode_header_time;
+        return _statistics;
+    }
 
 private:
     enum ColumnChunkReaderState { NOT_INIT, INITIALIZED, HEADER_PARSED, DATA_LOADED };
@@ -161,6 +172,7 @@ private:
     // Map: encoding -> Decoder
     // Plain or Dictionary encoding. If the dictionary grows too big, the encoding will fall back to the plain encoding
     std::unordered_map<int, std::unique_ptr<Decoder>> _decoders;
+    Statistics _statistics;
 };
 
 } // namespace doris::vectorized

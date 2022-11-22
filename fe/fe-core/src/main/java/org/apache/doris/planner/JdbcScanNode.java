@@ -101,7 +101,7 @@ public class JdbcScanNode extends ScanNode {
                 continue;
             }
             Column col = slot.getColumn();
-            columns.add(col.getName());
+            columns.add(OdbcTable.databaseProperName(jdbcType, col.getName()));
         }
         if (0 == columns.size()) {
             columns.add("*");
@@ -138,7 +138,8 @@ public class JdbcScanNode extends ScanNode {
         if (shouldPushDownLimit()
                 && (jdbcType == TOdbcTableType.MYSQL
                 || jdbcType == TOdbcTableType.POSTGRESQL
-                || jdbcType == TOdbcTableType.MONGODB)) {
+                || jdbcType == TOdbcTableType.MONGODB
+                || jdbcType == TOdbcTableType.CLICKHOUSE)) {
             sql.append(" LIMIT ").append(limit);
         }
 
@@ -170,7 +171,7 @@ public class JdbcScanNode extends ScanNode {
         numNodes = numNodes <= 0 ? 1 : numNodes;
 
         StatsRecursiveDerive.getStatsRecursiveDerive().statsRecursiveDerive(this);
-        cardinality = statsDeriveResult.getRowCount();
+        cardinality = (long) statsDeriveResult.getRowCount();
     }
 
     @Override

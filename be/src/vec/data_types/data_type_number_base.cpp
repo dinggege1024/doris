@@ -68,6 +68,14 @@ Status DataTypeNumberBase<T>::from_string(ReadBuffer& rb, IColumn* column) const
                                            std::string(rb.position(), rb.count()).c_str());
         }
         column_data->insert_value(val);
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
+        // Note: here we should handle the bool type
+        T val = 0;
+        if (!try_read_bool_text(val, rb)) {
+            return Status::InvalidArgument("parse boolean fail, string: '{}'",
+                                           std::string(rb.position(), rb.count()).c_str());
+        }
+        column_data->insert_value(val);
     } else if constexpr (std::is_integral<T>::value) {
         T val = 0;
         if (!read_int_text_impl(val, rb)) {
@@ -92,10 +100,17 @@ std::string DataTypeNumberBase<T>::to_string(const IColumn& column, size_t row_n
         return int128_to_string(
                 assert_cast<const ColumnVector<T>&>(*column.convert_to_full_column_if_const().get())
                         .get_data()[row_num]);
-    } else if constexpr (std::is_integral<T>::value || std::numeric_limits<T>::is_iec559) {
+    } else if constexpr (std::is_integral<T>::value) {
         return std::to_string(
                 assert_cast<const ColumnVector<T>&>(*column.convert_to_full_column_if_const().get())
                         .get_data()[row_num]);
+    } else if constexpr (std::numeric_limits<T>::is_iec559) {
+        fmt::memory_buffer buffer;
+        fmt::format_to(
+                buffer, "{}",
+                assert_cast<const ColumnVector<T>&>(*column.convert_to_full_column_if_const().get())
+                        .get_data()[row_num]);
+        return std::string(buffer.data(), buffer.size());
     }
 }
 

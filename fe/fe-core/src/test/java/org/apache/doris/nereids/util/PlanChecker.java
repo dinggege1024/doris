@@ -23,6 +23,7 @@ import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.jobs.batch.NereidsRewriteJobExecutor;
+import org.apache.doris.nereids.jobs.cascades.DeriveStatsJob;
 import org.apache.doris.nereids.memo.Group;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.memo.Memo;
@@ -107,6 +108,7 @@ public class PlanChecker {
 
     /**
      * apply a top down rewrite rule if you not care the ruleId
+     *
      * @param patternMatcher the rule dsl, such as: logicalOlapScan().then(olapScan -> olapScan)
      * @return this checker, for call chaining of follow-up check
      */
@@ -129,6 +131,7 @@ public class PlanChecker {
 
     /**
      * apply a bottom up rewrite rule if you not care the ruleId
+     *
      * @param patternMatcher the rule dsl, such as: logicalOlapScan().then(olapScan -> olapScan)
      * @return this checker, for call chaining of follow-up check
      */
@@ -163,7 +166,8 @@ public class PlanChecker {
         PhysicalPlan current = null;
         loop:
         for (Rule rule : RuleSet.IMPLEMENTATION_RULES) {
-            GroupExpressionMatching matching = new GroupExpressionMatching(rule.getPattern(), group.getLogicalExpression());
+            GroupExpressionMatching matching = new GroupExpressionMatching(rule.getPattern(),
+                    group.getLogicalExpression());
             for (Plan plan : matching) {
                 Plan after = rule.transform(plan, cascadesContext).get(0);
                 if (after instanceof PhysicalPlan) {
@@ -242,6 +246,13 @@ public class PlanChecker {
         }
     }
 
+    public PlanChecker deriveStats() {
+        cascadesContext.pushJob(
+            new DeriveStatsJob(cascadesContext.getMemo().getRoot().getLogicalExpression(), cascadesContext.getCurrentJobContext()));
+        cascadesContext.getJobScheduler().executeJobPool(cascadesContext);
+        return this;
+    }
+
     public PlanChecker matchesFromRoot(PatternDescriptor<? extends Plan> patternDesc) {
         Memo memo = cascadesContext.getMemo();
         assertMatches(memo, () -> new GroupExpressionMatching(patternDesc.pattern,
@@ -252,6 +263,17 @@ public class PlanChecker {
     public PlanChecker matches(PatternDescriptor<? extends Plan> patternDesc) {
         Memo memo = cascadesContext.getMemo();
         assertMatches(memo, () -> GroupMatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
+        return this;
+    }
+
+    public PlanChecker matchesExploration(PatternDescriptor<? extends Plan> patternDesc) {
+        Memo memo = cascadesContext.getMemo();
+        Supplier<Boolean> asserter = () -> new GroupExpressionMatching(patternDesc.pattern,
+                memo.getRoot().getLogicalExpressions().get(1)).iterator().hasNext();
+        Assertions.assertTrue(asserter.get(),
+                () -> "pattern not match, plan :\n"
+                        + memo.getRoot().getLogicalExpressions().get(1).getPlan().treeString()
+                        + "\n");
         return this;
     }
 
@@ -346,4 +368,38 @@ public class PlanChecker {
     public Plan getPlan() {
         return cascadesContext.getMemo().copyOut();
     }
+
+    public PlanChecker printlnTree() {
+        System.out.println(cascadesContext.getMemo().copyOut().treeString());
+        System.out.println("-----------------------------");
+        return this;
+    }
+
+    public PlanChecker printlnAllTree() {
+        System.out.println("--------------------------------");
+        for (Plan plan : cascadesContext.getMemo().copyOutAll()) {
+            System.out.println(plan.treeString());
+            System.out.println("--------------------------------");
+        }
+        return this;
+    }
+
+    public int plansNumber() {
+        return cascadesContext.getMemo().copyOutAll().size();
+    }
+
+    public PlanChecker printlnExploration() {
+        System.out.println(
+                cascadesContext.getMemo().copyOut(cascadesContext.getMemo().getRoot().logicalExpressionsAt(1), false)
+                        .treeString());
+        return this;
+    }
+
+    public PlanChecker printlnOrigin() {
+        System.out.println(
+                cascadesContext.getMemo().copyOut(cascadesContext.getMemo().getRoot().logicalExpressionsAt(0), false)
+                        .treeString());
+        return this;
+    }
+
 }

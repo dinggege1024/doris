@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 
+#include "common/config.h"
 #include "util/thrift_util.h"
 
 namespace doris::vectorized {
@@ -48,6 +49,7 @@ Status PageReader::next_page_header() {
         header_size = std::min(header_size, max_size);
         RETURN_IF_ERROR(_reader->read_bytes(&page_header_buf, _offset, header_size));
         real_header_size = header_size;
+        SCOPED_RAW_TIMER(&_statistics.decode_header_time);
         auto st =
                 deserialize_thrift_msg(page_header_buf, &real_header_size, true, &_cur_page_header);
         if (st.ok()) {

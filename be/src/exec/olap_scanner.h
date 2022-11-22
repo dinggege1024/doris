@@ -42,13 +42,14 @@ class OlapScanNode;
 class OlapScanner {
 public:
     OlapScanner(RuntimeState* runtime_state, OlapScanNode* parent, bool aggregation,
-                bool need_agg_finalize, const TPaloScanRange& scan_range, MemTracker* tracker);
+                bool need_agg_finalize, const TPaloScanRange& scan_range,
+                const std::shared_ptr<MemTracker>& tracker);
 
     virtual ~OlapScanner() = default;
 
     Status prepare(const TPaloScanRange& scan_range, const std::vector<OlapScanRange*>& key_ranges,
                    const std::vector<TCondition>& filters,
-                   const std::vector<std::pair<std::string, std::shared_ptr<IBloomFilterFuncBase>>>&
+                   const std::vector<std::pair<std::string, std::shared_ptr<BloomFilterFuncBase>>>&
                            bloom_filters,
                    const std::vector<FunctionFilter>& function_filters);
 
@@ -95,7 +96,7 @@ public:
 protected:
     Status _init_tablet_reader_params(
             const std::vector<OlapScanRange*>& key_ranges, const std::vector<TCondition>& filters,
-            const std::vector<std::pair<string, std::shared_ptr<IBloomFilterFuncBase>>>&
+            const std::vector<std::pair<string, std::shared_ptr<BloomFilterFuncBase>>>&
                     bloom_filters,
             const std::vector<FunctionFilter>& function_filters);
     Status _init_return_columns(bool need_seq_col);
@@ -141,6 +142,9 @@ protected:
     int64_t _num_rows_read = 0;
     int64_t _raw_rows_read = 0;
     int64_t _compressed_bytes_read = 0;
+    int64_t _avg_row_size = 0;
+    int64_t _first_batch_row_num = 0;
+    int64_t _first_batch_size = 0;
 
     size_t _batch_size = 0;
 
@@ -151,7 +155,7 @@ protected:
 
     MonotonicStopWatch _watcher;
 
-    MemTracker* _mem_tracker;
+    std::shared_ptr<MemTracker> _mem_tracker;
 
     TabletSchemaSPtr _tablet_schema;
 };

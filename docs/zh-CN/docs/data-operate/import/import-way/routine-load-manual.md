@@ -306,6 +306,37 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
 >
 > [https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md)
 
+**访问 Kerberos 认证的 Kafka 集群**
+
+访问开启kerberos认证的Kafka集群，需要增加以下配置：
+
+   - security.protocol=SASL_PLAINTEXT : 使用 SASL plaintext
+   - sasl.kerberos.service.name=$SERVICENAME : 设置 broker servicename
+   - sasl.kerberos.keytab=/etc/security/keytabs/${CLIENT_NAME}.keytab : 设置 keytab 本地文件路径
+   - sasl.kerberos.principal=${CLIENT_NAME}/${CLIENT_HOST} : 设置 Doris 连接 Kafka 时使用的 Kerberos 主体
+
+1. 创建例行导入作业
+
+   ```sql
+   CREATE ROUTINE LOAD db1.job1 on tbl1
+   PROPERTIES (
+   "desired_concurrent_number"="1",
+    )
+   FROM KAFKA
+   (
+       "kafka_broker_list" = "broker1:9092,broker2:9092",
+       "kafka_topic" = "my_topic",
+       "property.security.protocol" = "SASL_PLAINTEXT",
+       "property.sasl.kerberos.service.name" = "kafka",
+       "property.sasl.kerberos.keytab" = "/etc/krb5.keytab",
+       "property.sasl.kerberos.principal" = "doris@YOUR.COM"
+   );
+   ```
+
+**注意：**
+- 若要使 Doris 访问开启kerberos认证方式的Kafka集群，需要在 Doris 集群所有运行节点上部署 Kerberos 客户端 kinit，并配置 krb5.conf，填写KDC 服务信息等。
+- 配置 property.sasl.kerberos.keytab 的值需要指定 keytab 本地文件的绝对路径，并允许 Doris 进程访问该本地文件。
+
 ### 查看作业状态
 
 查看**作业**状态的具体命令和示例可以通过 `HELP SHOW ROUTINE LOAD;` 命令查看。
@@ -396,13 +427,9 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
 
    BE 配置项，默认为 3。该参数表示一个子任务中最多生成几个 consumer 进行数据消费。对于 Kafka 数据源，一个 consumer 可能消费一个或多个 kafka partition。假设一个任务需要消费 6 个 kafka partition，则会生成 3 个 consumer，每个 consumer 消费 2 个 partition。如果只有 2 个 partition，则只会生成 2 个 consumer，每个 consumer 消费 1 个 partition。
 
-5. push_write_mbytes_per_sec
+5. max_tolerable_backend_down_num FE 配置项，默认值是0。在满足某些条件下，Doris可PAUSED的任务重新调度，即变成RUNNING。该参数为0代表只有所有BE节点是alive状态才允许重新调度。
 
-   BE 配置项。默认为 10，即 10MB/s。该参数为导入通用参数，不限于例行导入作业。该参数限制了导入数据写入磁盘的速度。对于 SSD 等高性能存储设备，可以适当增加这个限速。
-
-6. max_tolerable_backend_down_num FE 配置项，默认值是0。在满足某些条件下，Doris可PAUSED的任务重新调度，即变成RUNNING。该参数为0代表只有所有BE节点是alive状态才允许重新调度。
-
-7. period_of_auto_resume_min FE 配置项，默认是5分钟。Doris重新调度，只会在5分钟这个周期内，最多尝试3次. 如果3次都失败则锁定当前任务，后续不在进行调度。但可通过人为干预，进行手动恢复。
+6. period_of_auto_resume_min FE 配置项，默认是5分钟。Doris重新调度，只会在5分钟这个周期内，最多尝试3次. 如果3次都失败则锁定当前任务，后续不在进行调度。但可通过人为干预，进行手动恢复。
 
 ## 更多帮助
 

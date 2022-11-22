@@ -22,6 +22,7 @@
 
 #include "common/status.h"
 #include "exprs/bloomfilter_predicate.h"
+#include "exprs/hybrid_set.h"
 #include "gen_cpp/Exprs_types.h"
 #include "runtime/types.h"
 #include "udf/udf_internal.h"
@@ -45,7 +46,7 @@ public:
     // resize inserted param column to make sure column size equal to block.rows()
     // and return param column index
     static size_t insert_param(Block* block, ColumnWithTypeAndName&& elem, size_t size) {
-        // usualy elem.column always is const column, so we just clone it.
+        // usually elem.column always is const column, so we just clone it.
         elem.column = elem.column->clone_resized(size);
         block->insert(std::move(elem));
         return block->columns() - 1;
@@ -133,6 +134,8 @@ public:
 
     bool is_and_expr() const { return _fn.name.function_name == "and"; }
 
+    virtual bool is_compound_predicate() const { return false; }
+
     const TFunction& fn() const { return _fn; }
 
     /// Returns true if expr doesn't contain slotrefs, i.e., can be evaluated
@@ -146,7 +149,7 @@ public:
     /// expr.
     virtual ColumnPtrWrapper* get_const_col(VExprContext* context);
 
-    int fn_context_index() { return _fn_context_index; };
+    int fn_context_index() const { return _fn_context_index; };
 
     static const VExpr* expr_without_cast(const VExpr* expr) {
         if (expr->node_type() == doris::TExprNodeType::CAST_EXPR) {
@@ -159,11 +162,13 @@ public:
     virtual const VExpr* get_impl() const { return nullptr; }
 
     // If this expr is a BloomPredicate, this method will return a BloomFilterFunc
-    virtual std::shared_ptr<IBloomFilterFuncBase> get_bloom_filter_func() const {
+    virtual std::shared_ptr<BloomFilterFuncBase> get_bloom_filter_func() const {
         LOG(FATAL) << "Method 'get_bloom_filter_func()' is not supported in expression: "
                    << this->debug_string();
         return nullptr;
     }
+
+    virtual std::shared_ptr<HybridSetBase> get_set_func() const { return nullptr; }
 
 protected:
     /// Simple debug string that provides no expr subclass-specific information

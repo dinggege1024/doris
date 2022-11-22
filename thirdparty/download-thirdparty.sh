@@ -276,6 +276,16 @@ fi
 cd -
 echo "Finished patching ${GSASL_SOURCE}"
 
+# cyrus-sasl patch to force compile gssapi plugin when static linking
+# this is for librdkafka with sasl
+cd "${TP_SOURCE_DIR}/${CYRUS_SASL_SOURCE}"
+if [[ ! -f ${PATCHED_MARK} ]]; then
+    patch -p1 <"${TP_PATCH_DIR}/cyrus-sasl-2.1.27.patch"
+    touch "${PATCHED_MARK}"
+fi
+cd -
+echo "Finished patching ${CYRUS_SASL_SOURCE}"
+
 # rocksdb patch to fix compile error
 if [[ "${ROCKSDB_SOURCE}" == "rocksdb-5.14.2" ]]; then
     cd "${TP_SOURCE_DIR}/${ROCKSDB_SOURCE}"
@@ -373,7 +383,12 @@ echo "Finished patching ${AWS_SDK_SOURCE}"
 
 cd "${TP_SOURCE_DIR}/${BRPC_SOURCE}"
 if [[ ! -f "${PATCHED_MARK}" ]]; then
-    for file in "${TP_PATCH_DIR}"/brpc-1.2.0-*.patch; do
+    # Currently, there are two types of patches for BRPC in Doris:
+    # 1. brpc-fix-*.patch - These patches are not included in upstream but they can fix some bugs in some specific
+    #    scenarios.
+    # 2. brpc-{VERSION}-*.patch - These patches are included in upstream but they are not in current VERISON. We
+    #    backport some bug fixes to the current VERSION.
+    for file in "${TP_PATCH_DIR}"/brpc-*.patch; do
         patch -p1 <"${file}"
     done
     touch "${PATCHED_MARK}"

@@ -55,9 +55,11 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
 
     private final boolean disassembled;
     private final boolean normalized;
-    private final List<Expression> groupByExpressions;
-    private final List<NamedExpression> outputExpressions;
     private final AggPhase aggPhase;
+    private final ImmutableList<Expression> groupByExpressions;
+    private final ImmutableList<NamedExpression> outputExpressions;
+    // TODO: we should decide partition expression according to cost.
+    private final Optional<ImmutableList<Expression>> partitionExpressions;
 
     // use for scenes containing distinct agg
     // 1. If there is LOCAL only, LOCAL is the final phase
@@ -74,7 +76,8 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
             List<Expression> groupByExpressions,
             List<NamedExpression> outputExpressions,
             CHILD_TYPE child) {
-        this(groupByExpressions, outputExpressions, false, false, true, AggPhase.LOCAL, child);
+        this(groupByExpressions, outputExpressions, Optional.empty(), false,
+                false, true, AggPhase.LOCAL, child);
     }
 
     public LogicalAggregate(
@@ -85,7 +88,20 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
             boolean isFinalPhase,
             AggPhase aggPhase,
             CHILD_TYPE child) {
-        this(groupByExpressions, outputExpressions, disassembled, normalized, isFinalPhase,
+        this(groupByExpressions, outputExpressions, Optional.empty(), disassembled, normalized,
+                isFinalPhase, aggPhase, Optional.empty(), Optional.empty(), child);
+    }
+
+    public LogicalAggregate(
+            List<Expression> groupByExpressions,
+            List<NamedExpression> outputExpressions,
+            Optional<List<Expression>> partitionExpressions,
+            boolean disassembled,
+            boolean normalized,
+            boolean isFinalPhase,
+            AggPhase aggPhase,
+            CHILD_TYPE child) {
+        this(groupByExpressions, outputExpressions, partitionExpressions, disassembled, normalized, isFinalPhase,
                 aggPhase, Optional.empty(), Optional.empty(), child);
     }
 
@@ -95,6 +111,7 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
     public LogicalAggregate(
             List<Expression> groupByExpressions,
             List<NamedExpression> outputExpressions,
+            Optional<List<Expression>> partitionExpressions,
             boolean disassembled,
             boolean normalized,
             boolean isFinalPhase,
@@ -103,8 +120,9 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
             Optional<LogicalProperties> logicalProperties,
             CHILD_TYPE child) {
         super(PlanType.LOGICAL_AGGREGATE, groupExpression, logicalProperties, child);
-        this.groupByExpressions = groupByExpressions;
-        this.outputExpressions = outputExpressions;
+        this.groupByExpressions = ImmutableList.copyOf(groupByExpressions);
+        this.outputExpressions = ImmutableList.copyOf(outputExpressions);
+        this.partitionExpressions = partitionExpressions.map(ImmutableList::copyOf);
         this.disassembled = disassembled;
         this.normalized = normalized;
         this.isFinalPhase = isFinalPhase;
@@ -117,6 +135,10 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
 
     public List<NamedExpression> getOutputExpressions() {
         return outputExpressions;
+    }
+
+    public List<Expression> getPartitionExpressions() {
+        return partitionExpressions.orElse(groupByExpressions);
     }
 
     public AggPhase getAggPhase() {
@@ -141,7 +163,7 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
 
     @Override
     public <R, C> R accept(PlanVisitor<R, C> visitor, C context) {
-        return visitor.visitLogicalAggregate((LogicalAggregate<Plan>) this, context);
+        return visitor.visitLogicalAggregate(this, context);
     }
 
     @Override
@@ -177,6 +199,7 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
         LogicalAggregate that = (LogicalAggregate) o;
         return Objects.equals(groupByExpressions, that.groupByExpressions)
                 && Objects.equals(outputExpressions, that.outputExpressions)
+                && Objects.equals(partitionExpressions, that.partitionExpressions)
                 && aggPhase == that.aggPhase
                 && disassembled == that.disassembled
                 && normalized == that.normalized
@@ -185,31 +208,34 @@ public class LogicalAggregate<CHILD_TYPE extends Plan> extends LogicalUnary<CHIL
 
     @Override
     public int hashCode() {
-        return Objects.hash(groupByExpressions, outputExpressions, aggPhase, normalized, disassembled, isFinalPhase);
+        return Objects.hash(groupByExpressions, outputExpressions, partitionExpressions,
+                aggPhase, normalized, disassembled, isFinalPhase);
     }
 
     @Override
     public LogicalAggregate<Plan> withChildren(List<Plan> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new LogicalAggregate<>(groupByExpressions, outputExpressions,
+        return new LogicalAggregate<>(groupByExpressions, outputExpressions, partitionExpressions.map(List.class::cast),
                 disassembled, normalized, isFinalPhase, aggPhase, children.get(0));
     }
 
     @Override
     public LogicalAggregate<Plan> withGroupExpression(Optional<GroupExpression> groupExpression) {
-        return new LogicalAggregate<>(groupByExpressions, outputExpressions, disassembled, normalized, isFinalPhase,
-                aggPhase, groupExpression, Optional.of(getLogicalProperties()), children.get(0));
+        return new LogicalAggregate<>(groupByExpressions, outputExpressions, partitionExpressions.map(List.class::cast),
+                disassembled, normalized, isFinalPhase, aggPhase,
+                groupExpression, Optional.of(getLogicalProperties()), children.get(0));
     }
 
     @Override
     public LogicalAggregate<Plan> withLogicalProperties(Optional<LogicalProperties> logicalProperties) {
-        return new LogicalAggregate<>(groupByExpressions, outputExpressions, disassembled, normalized, isFinalPhase,
-                aggPhase, Optional.empty(), logicalProperties, children.get(0));
+        return new LogicalAggregate<>(groupByExpressions, outputExpressions, partitionExpressions.map(List.class::cast),
+                disassembled, normalized, isFinalPhase, aggPhase,
+                Optional.empty(), logicalProperties, children.get(0));
     }
 
     public LogicalAggregate<Plan> withGroupByAndOutput(List<Expression> groupByExprList,
             List<NamedExpression> outputExpressionList) {
-        return new LogicalAggregate<>(groupByExprList, outputExpressionList,
+        return new LogicalAggregate<>(groupByExprList, outputExpressionList, partitionExpressions.map(List.class::cast),
                 disassembled, normalized, isFinalPhase, aggPhase, child());
     }
 }

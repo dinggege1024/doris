@@ -147,7 +147,7 @@ distribution_desc
         v4 INT SUM NOT NULL DEFAULT "1" COMMENT "This is column v4"
         ```
     
-*  `index_definition_list`
+* `index_definition_list`
 
     索引列表定义：
     
@@ -231,7 +231,16 @@ distribution_desc
   
     定义数据分桶方式。
 
-    `DISTRIBUTED BY HASH (k1[,k2 ...]) [BUCKETS num]`
+    1) Hash 分桶
+       语法：
+          `DISTRIBUTED BY HASH (k1[,k2 ...]) [BUCKETS num]`
+       说明：
+          使用指定的 key 列进行哈希分桶。
+    2) Random 分桶
+       语法：
+          `DISTRIBUTED BY RANDOM [BUCKETS num]`
+       说明：
+          使用随机数进行分桶。 
 
 * `rollup_list`
 
@@ -305,6 +314,14 @@ distribution_desc
 
         `"compression"="zstd"`
 
+    * `function_column.sequence_col`
+
+        当使用 UNIQUE KEY 模型时，可以指定一个sequence列，当KEY列相同时，将按照 sequence 列进行 REPLACE(较大值替换较小值，否则无法替换)
+
+        `function_column.sequence_col`用来指定sequence列到表中某一列的映射，该列可以为整型和时间类型（DATE、DATETIME），创建后不能更改该列的类型。如果设置了`function_column.sequence_col`, `function_column.sequence_type`将被忽略。
+    
+        `"function_column.sequence_col" = 'column_name'`
+
     * `function_column.sequence_type`
 
         当使用 UNIQUE KEY 模型时，可以指定一个sequence列，当KEY列相同时，将按照 sequence 列进行 REPLACE(较大值替换较小值，否则无法替换)
@@ -315,7 +332,9 @@ distribution_desc
     
     * `light_schema_change`
 
-        Doris默认不使用light schema change优化。如果想使用该优化需要指定为true。
+        是否使用light schema change优化。
+
+        如果设置成 `true`, 对于值列的加减操作，可以更快地，同步地完成。
     
         `"light_schema_change" = 'true'`
     
@@ -567,9 +586,40 @@ distribution_desc
         "dynamic_partition.end" = "3",
         "dynamic_partition.prefix" = "p",
         "dynamic_partition.buckets" = "32",
-        "dynamic_partition."replication_allocation" = "tag.location.group_a:3"
+        "dynamic_partition.replication_allocation" = "tag.location.group_a:3"
      );
     ```
+
+11. 通过`storage_policy`属性设置表的冷热分离数据迁移策略
+```
+        CREATE TABLE IF NOT EXISTS create_table_use_created_policy 
+        (
+            k1 BIGINT,
+            k2 LARGEINT,
+            v1 VARCHAR(2048)
+        )
+        UNIQUE KEY(k1)
+        DISTRIBUTED BY HASH (k1) BUCKETS 3
+        PROPERTIES(
+            "storage_policy" = "test_create_table_use_policy",
+            "replication_num" = "1"
+        );
+```
+注：需要先创建s3 resource 和 storage policy，表才能关联迁移策略成功
+
+12. 为表的分区添加冷热分离数据迁移策略
+```
+        CREATE TABLE create_table_partion_use_created_policy
+        (
+            k1 DATE,
+            k2 INT,
+            V1 VARCHAR(2048) REPLACE
+        ) PARTITION BY RANGE (k1) (
+            PARTITION p1 VALUES LESS THAN ("2022-01-01") ("storage_policy" = "test_create_table_partition_use_policy_1" ,"replication_num"="1"),
+            PARTITION p2 VALUES LESS THAN ("2022-02-01") ("storage_policy" = "test_create_table_partition_use_policy_2" ,"replication_num"="1")
+        ) DISTRIBUTED BY HASH(k2) BUCKETS 1;
+```
+注：需要先创建s3 resource 和 storage policy，表才能关联迁移策略成功
 
 ### Keywords
 

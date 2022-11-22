@@ -324,6 +324,37 @@ FROM KAFKA
 >
 >
 
+**Accessing a Kerberos-certified Kafka cluster**
+
+Accessing a Kerberos-certified Kafka cluster. The following configurations need to be added:
+
+   - security.protocol=SASL_PLAINTEXT : Use SASL plaintext
+   - sasl.kerberos.service.name=$SERVICENAME : Broker service name
+   - sasl.kerberos.keytab=/etc/security/keytabs/${CLIENT_NAME}.keytab : Client keytab location
+   - sasl.kerberos.principal=${CLIENT_NAME}/${CLIENT_HOST} : sasl.kerberos.principal
+
+1. Create routine import jobs
+
+   ```sql
+   CREATE ROUTINE LOAD db1.job1 on tbl1
+   PROPERTIES (
+   "desired_concurrent_number"="1",
+    )
+   FROM KAFKA
+   (
+       "kafka_broker_list" = "broker1:9092,broker2:9092",
+       "kafka_topic" = "my_topic",
+       "property.security.protocol" = "SASL_PLAINTEXT",
+       "property.sasl.kerberos.service.name" = "kafka",
+       "property.sasl.kerberos.keytab" = "/etc/krb5.keytab",
+       "property.sasl.kerberos.principal" = "doris@YOUR.COM"
+   );
+   ```
+
+**Note:**
+- To enable Doris to access the Kafka cluster with Kerberos authentication enabled, you need to deploy the Kerberos client kinit on all running nodes of the Doris cluster, configure krb5.conf, and fill in KDC service information.
+- Configure property.sasl.kerberos The value of keytab needs to specify the absolute path of the keytab local file and allow Doris processes to access the local file.
+
 ### Viewing Job Status
 
 Specific commands and examples to view the status of **jobs** can be viewed with the `HELP SHOW ROUTINE LOAD;` command.
@@ -414,15 +445,11 @@ Some system configuration parameters can affect the use of routine import.
 
    BE configuration item, default is 3. This parameter indicates the maximum number of consumers that can be generated for data consumption in a subtask. For a Kafka data source, a consumer may consume one or more kafka partitions. If there are only 2 partitions, only 2 consumers are generated, each consuming 1 partition. 5. push_write_mby
 
-5. push_write_mbytes_per_sec
-
-   BE configuration item. The default is 10, i.e. 10MB/s. This parameter is generic for importing and is not limited to routine import jobs. This parameter limits the speed at which imported data can be written to disk. For high performance storage devices such as SSDs, this speed limit can be increased as appropriate. 6.
-
-6. max_tolerable_backend_down_num 
+5. max_tolerable_backend_down_num 
 
    FE configuration item, the default value is 0. Doris can PAUSED job rescheduling to RUNNING if certain conditions are met. 0 means rescheduling is allowed only if all BE nodes are ALIVE.
 
-7. period_of_auto_resume_min 
+6. period_of_auto_resume_min 
 
    FE configuration item, the default is 5 minutes, Doris rescheduling will only be attempted up to 3 times within the 5 minute period. If all 3 attempts fail, the current task is locked and no further scheduling is performed. However, manual recovery can be done through human intervention.
 

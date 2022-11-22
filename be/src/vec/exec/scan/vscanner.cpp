@@ -21,11 +21,10 @@
 
 namespace doris::vectorized {
 
-VScanner::VScanner(RuntimeState* state, VScanNode* parent, int64_t limit, MemTracker* mem_tracker)
+VScanner::VScanner(RuntimeState* state, VScanNode* parent, int64_t limit)
         : _state(state),
           _parent(parent),
           _limit(limit),
-          _mem_tracker(mem_tracker),
           _input_tuple_desc(parent->input_tuple_desc()),
           _output_tuple_desc(parent->output_tuple_desc()) {
     _real_tuple_desc = _input_tuple_desc != nullptr ? _input_tuple_desc : _output_tuple_desc;
@@ -36,7 +35,6 @@ VScanner::VScanner(RuntimeState* state, VScanNode* parent, int64_t limit, MemTra
 Status VScanner::get_block(RuntimeState* state, Block* block, bool* eof) {
     // only empty block should be here
     DCHECK(block->rows() == 0);
-    SCOPED_CONSUME_MEM_TRACKER(_mem_tracker);
 
     int64_t raw_rows_threshold = raw_rows_read() + config::doris_scanner_row_num;
     if (!block->mem_reuse()) {
@@ -72,7 +70,11 @@ Status VScanner::get_block(RuntimeState* state, Block* block, bool* eof) {
 }
 
 Status VScanner::_filter_output_block(Block* block) {
-    return VExprContext::filter_block(_vconjunct_ctx, block, _output_tuple_desc->slots().size());
+    auto old_rows = block->rows();
+    Status st =
+            VExprContext::filter_block(_vconjunct_ctx, block, _output_tuple_desc->slots().size());
+    _counter.num_rows_unselected += old_rows - block->rows();
+    return st;
 }
 
 Status VScanner::try_append_late_arrival_runtime_filter() {
@@ -94,7 +96,7 @@ Status VScanner::try_append_late_arrival_runtime_filter() {
     if (_vconjunct_ctx) {
         _discard_conjuncts();
     }
-    // Notice that the number of runtiem filters may be larger than _applied_rf_num.
+    // Notice that the number of runtime filters may be larger than _applied_rf_num.
     // But it is ok because it will be updated at next time.
     RETURN_IF_ERROR(_parent->clone_vconjunct_ctx(&_vconjunct_ctx));
     _applied_rf_num = arrived_rf_num;
@@ -118,8 +120,11 @@ Status VScanner::close(RuntimeState* state) {
 }
 
 void VScanner::_update_counters_before_close() {
-    if (!_state->enable_profile()) return;
+    if (!_state->enable_profile() && !_is_load) return;
     COUNTER_UPDATE(_parent->_rows_read_counter, _num_rows_read);
+    // Update stats for load
+    _state->update_num_rows_load_filtered(_counter.num_rows_filtered);
+    _state->update_num_rows_load_unselected(_counter.num_rows_unselected);
 }
 
 } // namespace doris::vectorized

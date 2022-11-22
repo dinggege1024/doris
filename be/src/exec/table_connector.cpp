@@ -17,6 +17,8 @@
 
 #include "exec/table_connector.h"
 
+#include <codecvt>
+
 #include "exprs/expr.h"
 #include "runtime/primitive_type.h"
 #include "util/mysql_global.h"
@@ -142,7 +144,7 @@ Status TableConnector::append(const std::string& table_name, RowBatch* batch,
                 break;
             }
         }
-        // Translate utf8 string to utf16 to use unicode encodeing
+        // Translate utf8 string to utf16 to use unicode encoding
         insert_stmt = utf8_to_u16string(_insert_stmt_buffer.data(),
                                         _insert_stmt_buffer.data() + _insert_stmt_buffer.size());
     }
@@ -154,12 +156,26 @@ Status TableConnector::append(const std::string& table_name, RowBatch* batch,
 
 Status TableConnector::append(const std::string& table_name, vectorized::Block* block,
                               const std::vector<vectorized::VExprContext*>& output_vexpr_ctxs,
-                              uint32_t start_send_row, uint32_t* num_rows_sent) {
+                              uint32_t start_send_row, uint32_t* num_rows_sent,
+                              bool need_extra_convert) {
     _insert_stmt_buffer.clear();
     std::u16string insert_stmt;
     {
         SCOPED_TIMER(_convert_tuple_timer);
         fmt::format_to(_insert_stmt_buffer, "INSERT INTO {} VALUES (", table_name);
+
+        auto extra_convert_func = [&](const std::string_view& str, const bool& is_date) -> void {
+            if (!need_extra_convert) {
+                fmt::format_to(_insert_stmt_buffer, "'{}'", str);
+            } else {
+                if (is_date) {
+                    fmt::format_to(_insert_stmt_buffer, "to_date('{}','yyyy-mm-dd')", str);
+                } else {
+                    fmt::format_to(_insert_stmt_buffer, "to_date('{}','yyyy-mm-dd hh24:mi:ss')",
+                                   str);
+                }
+            }
+        };
 
         int num_rows = block->rows();
         int num_columns = block->columns();
@@ -211,7 +227,17 @@ Status TableConnector::append(const std::string& table_name, vectorized::Block* 
                     fmt::format_to(_insert_stmt_buffer, "{}",
                                    *reinterpret_cast<const double*>(item));
                     break;
-                case TYPE_DATE:
+                case TYPE_DATE: {
+                    vectorized::VecDateTimeValue value =
+                            binary_cast<int64_t, doris::vectorized::VecDateTimeValue>(
+                                    *(int64_t*)item);
+
+                    char buf[64];
+                    char* pos = value.to_string(buf);
+                    std::string_view str(buf, pos - buf - 1);
+                    extra_convert_func(str, true);
+                    break;
+                }
                 case TYPE_DATETIME: {
                     vectorized::VecDateTimeValue value =
                             binary_cast<int64_t, doris::vectorized::VecDateTimeValue>(
@@ -220,7 +246,7 @@ Status TableConnector::append(const std::string& table_name, vectorized::Block* 
                     char buf[64];
                     char* pos = value.to_string(buf);
                     std::string_view str(buf, pos - buf - 1);
-                    fmt::format_to(_insert_stmt_buffer, "'{}'", str);
+                    extra_convert_func(str, false);
                     break;
                 }
                 case TYPE_DATEV2: {
@@ -231,7 +257,7 @@ Status TableConnector::append(const std::string& table_name, vectorized::Block* 
                     char buf[64];
                     char* pos = value.to_string(buf);
                     std::string str(buf, pos - buf - 1);
-                    fmt::format_to(_insert_stmt_buffer, "'{}'", str);
+                    extra_convert_func(str, true);
                     break;
                 }
                 case TYPE_DATETIMEV2: {
@@ -243,7 +269,7 @@ Status TableConnector::append(const std::string& table_name, vectorized::Block* 
                     char buf[64];
                     char* pos = value.to_string(buf, output_vexpr_ctxs[i]->root()->type().scale);
                     std::string str(buf, pos - buf - 1);
-                    fmt::format_to(_insert_stmt_buffer, "'{}'", str);
+                    extra_convert_func(str, false);
                     break;
                 }
                 case TYPE_VARCHAR:
@@ -259,7 +285,7 @@ Status TableConnector::append(const std::string& table_name, vectorized::Block* 
                 }
                 case TYPE_DECIMAL32:
                 case TYPE_DECIMAL64:
-                case TYPE_DECIMAL128: {
+                case TYPE_DECIMAL128I: {
                     auto val = type_ptr->to_string(*column, i);
                     fmt::format_to(_insert_stmt_buffer, "{}", val);
                     break;
@@ -284,7 +310,7 @@ Status TableConnector::append(const std::string& table_name, vectorized::Block* 
                 break;
             }
         }
-        // Translate utf8 string to utf16 to use unicode encodeing
+        // Translate utf8 string to utf16 to use unicode encoding
         insert_stmt = utf8_to_u16string(_insert_stmt_buffer.data(),
                                         _insert_stmt_buffer.data() + _insert_stmt_buffer.size());
     }

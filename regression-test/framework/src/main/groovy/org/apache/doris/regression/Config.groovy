@@ -123,9 +123,14 @@ class Config {
             def systemProperties = Maps.newLinkedHashMap(System.getProperties())
             configSlurper.setBinding(systemProperties)
             ConfigObject configObj = configSlurper.parse(new File(confFilePath).toURI().toURL())
+            String customConfFilePath = confFile.getParentFile().getPath() + "/regression-conf-custom.groovy"
+            File custFile = new File(customConfFilePath)
+            if (custFile.exists() && custFile.isFile()) {
+                ConfigObject custConfigObj = configSlurper.parse(new File(customConfFilePath).toURI().toURL())
+                configObj.merge(custConfigObj)
+            }
             config = Config.fromConfigObject(configObj)
         }
-
         fillDefaultConfig(config)
 
         config.suitePath = FileUtils.getCanonicalPath(cmd.getOptionValue(pathOpt, config.suitePath))
@@ -198,8 +203,8 @@ class Config {
         config.feHttpPassword = cmd.getOptionValue(feHttpPasswordOpt, config.feHttpPassword)
         config.generateOutputFile = cmd.hasOption(genOutOpt)
         config.forceGenerateOutputFile = cmd.hasOption(forceGenOutOpt)
-        config.parallel = Integer.parseInt(cmd.getOptionValue(parallelOpt, "1"))
-        config.suiteParallel = Integer.parseInt(cmd.getOptionValue(suiteParallelOpt, "1"))
+        config.parallel = Integer.parseInt(cmd.getOptionValue(parallelOpt, "10"))
+        config.suiteParallel = Integer.parseInt(cmd.getOptionValue(suiteParallelOpt, "10"))
         config.actionParallel = Integer.parseInt(cmd.getOptionValue(actionParallelOpt, "10"))
         config.times = Integer.parseInt(cmd.getOptionValue(timesOpt, "1"))
         config.randomOrder = cmd.hasOption(randomOrderOpt)
@@ -265,7 +270,8 @@ class Config {
         }
 
         if (config.jdbcUrl == null) {
-            config.jdbcUrl = "jdbc:mysql://127.0.0.1:9030"
+            //jdbcUrl needs parameter here. Refer to function: buildUrl(String dbName)
+            config.jdbcUrl = "jdbc:mysql://127.0.0.1:9030/?useLocalSessionState=true"
             log.info("Set jdbcUrl to '${config.jdbcUrl}' because not specify.".toString())
         }
 
@@ -418,11 +424,16 @@ class Config {
         // e.g.
         // suites/tpcds_sf1/load.groovy
         // suites/tpcds_sf1/sql/q01.sql
+        // suites/tpcds_sf1/sql/dir/q01.sql
         if (dir.indexOf(File.separator + "sql", dir.length() - 4) > 0 && dir.endsWith("sql")) {
             dir = dir.substring(0, dir.indexOf(File.separator + "sql", dir.length() - 4))
         }
+        if (dir.indexOf(File.separator + "sql" + File.separator) > 0) {
+            dir = dir.substring(0, dir.indexOf(File.separator + "sql" + File.separator))
+        }
 
         dir = dir.replace('-', '_')
+        dir = dir.replace('.', '_')
 
         return defaultDb + '_' + dir.replace(File.separator, '_')
     }

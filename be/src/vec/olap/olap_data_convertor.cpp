@@ -75,8 +75,8 @@ OlapBlockDataConvertor::create_olap_column_data_convertor(const TabletColumn& co
     case FieldType::OLAP_FIELD_TYPE_DECIMAL64: {
         return std::make_unique<OlapColumnDataConvertorDecimalV3<Decimal64>>();
     }
-    case FieldType::OLAP_FIELD_TYPE_DECIMAL128: {
-        return std::make_unique<OlapColumnDataConvertorDecimalV3<Decimal128>>();
+    case FieldType::OLAP_FIELD_TYPE_DECIMAL128I: {
+        return std::make_unique<OlapColumnDataConvertorDecimalV3<Decimal128I>>();
     }
     case FieldType::OLAP_FIELD_TYPE_JSONB: {
         return std::make_unique<OlapColumnDataConvertorJsonb>();
@@ -160,6 +160,7 @@ void OlapBlockDataConvertor::OlapColumnDataConvertorBase::set_source_column(
 void OlapBlockDataConvertor::OlapColumnDataConvertorBase::clear_source_column() {
     // just to reduce the source column's ref count to 1
     _typed_column.column = nullptr;
+    _nullmap = nullptr;
 }
 
 // This should be called only in SegmentWriter. If you want to access nullmap in Convertor,

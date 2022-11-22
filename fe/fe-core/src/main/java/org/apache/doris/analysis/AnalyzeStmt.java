@@ -19,10 +19,12 @@ package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
+import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.Table;
+import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
@@ -31,6 +33,7 @@ import org.apache.doris.common.FeNameFormat;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.PrintableMap;
 import org.apache.doris.common.util.Util;
+import org.apache.doris.datasource.CatalogIf;
 import org.apache.doris.mysql.privilege.PaloAuth;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
@@ -43,6 +46,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.apache.commons.lang.StringUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -71,7 +75,7 @@ public class AnalyzeStmt extends DdlStmt {
 
     private final TableName optTableName;
     private final PartitionNames optPartitionNames;
-    private final List<String> optColumnNames;
+    private List<String> optColumnNames;
     private Map<String, String> optProperties;
 
     // after analyzed
@@ -150,11 +154,11 @@ public class AnalyzeStmt extends DdlStmt {
             try {
                 OlapTable olapTable = (OlapTable) table;
                 List<String> partitionNames = getPartitionNames();
-                if (partitionNames.isEmpty() && olapTable.isPartitioned()) {
-                    partitionNames.addAll(olapTable.getPartitionNames());
+                List<String> newPartitionNames = new ArrayList<>(partitionNames);
+                if (newPartitionNames.isEmpty() && olapTable.isPartitioned()) {
+                    newPartitionNames.addAll(olapTable.getPartitionNames());
                 }
-                List<String> notEmptyPartition = getNotEmptyPartition(olapTable, partitionNames);
-                tableIdToPartitionName.put(table.getId(), notEmptyPartition);
+                tableIdToPartitionName.put(table.getId(), newPartitionNames);
             } finally {
                 table.readUnlock();
             }
@@ -201,17 +205,13 @@ public class AnalyzeStmt extends DdlStmt {
         if (optTableName != null) {
             optTableName.analyze(analyzer);
 
-            // disallow external catalog
-            Util.prohibitExternalCatalog(optTableName.getCtl(),
-                    this.getClass().getSimpleName());
-
+            String catalogName = optTableName.getCtl();
             String dbName = optTableName.getDb();
             String tblName = optTableName.getTbl();
-            Database db = analyzer.getEnv().getInternalCatalog().getDbOrAnalysisException(dbName);
-            Table table = db.getTableOrAnalysisException(tblName);
+            CatalogIf catalog = analyzer.getEnv().getCatalogMgr().getCatalog(catalogName);
+            DatabaseIf db = catalog.getDbOrAnalysisException(dbName);
+            TableIf table = db.getTableOrAnalysisException(tblName);
 
-            // external table is not supported
-            checkAnalyzeType(table);
             checkAnalyzePriv(dbName, tblName);
 
             if (optColumnNames != null && !optColumnNames.isEmpty()) {
@@ -229,6 +229,9 @@ public class AnalyzeStmt extends DdlStmt {
                 } finally {
                     table.readUnlock();
                 }
+            } else {
+                optColumnNames = table.getBaseSchema(false)
+                        .stream().map(Column::getName).collect(Collectors.toList());
             }
 
             dbId = db.getId();
@@ -332,17 +335,6 @@ public class AnalyzeStmt extends DdlStmt {
         optProperties.put(CBO_STATISTICS_TASK_TIMEOUT_SEC, String.valueOf(taskTimeout));
     }
 
-    private List<String> getNotEmptyPartition(OlapTable olapTable, List<String> partitionNames) {
-        List<String> notEmptyPartition = Lists.newArrayList();
-        for (String partitionName : partitionNames) {
-            Partition partition = olapTable.getPartition(partitionName);
-            if (partition != null && partition.getDataSize() > 0) {
-                notEmptyPartition.add(partitionName);
-            }
-        }
-        return notEmptyPartition;
-    }
-
     @Override
     public String toSql() {
         StringBuilder sb = new StringBuilder();
@@ -374,5 +366,21 @@ public class AnalyzeStmt extends DdlStmt {
         }
 
         return sb.toString();
+    }
+
+    public String getCatalogName() {
+        return optTableName.getCtl();
+    }
+
+    public String getDBName() {
+        return optTableName.getDb();
+    }
+
+    public String getTblName() {
+        return optTableName.getTbl();
+    }
+
+    public List<String> getOptColumnNames() {
+        return optColumnNames;
     }
 }

@@ -26,7 +26,7 @@
 
 namespace doris::vectorized {
 
-/// min, max
+/// min, max, any
 template <template <typename, bool> class AggregateFunctionTemplate, template <typename> class Data>
 static IAggregateFunction* create_aggregate_function_single_value(const String& name,
                                                                   const DataTypes& argument_types,
@@ -70,6 +70,10 @@ static IAggregateFunction* create_aggregate_function_single_value(const String& 
         return new AggregateFunctionTemplate<Data<SingleValueDataDecimal<Decimal128>>, false>(
                 argument_type);
     }
+    if (which.idx == TypeIndex::Decimal128I) {
+        return new AggregateFunctionTemplate<Data<SingleValueDataDecimal<Decimal128I>>, false>(
+                argument_type);
+    }
     return nullptr;
 }
 
@@ -93,9 +97,22 @@ AggregateFunctionPtr create_aggregate_function_min(const std::string& name,
                                                                              parameters));
 }
 
+AggregateFunctionPtr create_aggregate_function_any(const std::string& name,
+                                                   const DataTypes& argument_types,
+                                                   const Array& parameters,
+                                                   const bool result_is_nullable) {
+    return AggregateFunctionPtr(
+            create_aggregate_function_single_value<AggregateFunctionsSingleValue,
+                                                   AggregateFunctionAnyData>(name, argument_types,
+                                                                             parameters));
+}
+
 void register_aggregate_function_minmax(AggregateFunctionSimpleFactory& factory) {
     factory.register_function("max", create_aggregate_function_max);
     factory.register_function("min", create_aggregate_function_min);
+    factory.register_function("any", create_aggregate_function_any);
+
+    factory.register_alias("any", "any_value");
 }
 
 } // namespace doris::vectorized

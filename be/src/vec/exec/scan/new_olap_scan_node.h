@@ -57,8 +57,6 @@ private:
     OlapScanKeys _scan_keys;
     std::vector<TCondition> _olap_filters;
 
-    std::unique_ptr<MemTracker> _scanner_mem_tracker;
-
 private:
     std::unique_ptr<RuntimeProfile> _segment_profile;
 
@@ -67,6 +65,8 @@ private:
     RuntimeProfile::Counter* _tablet_counter = nullptr;
     RuntimeProfile::Counter* _rows_pushed_cond_filtered_counter = nullptr;
     RuntimeProfile::Counter* _reader_init_timer = nullptr;
+    RuntimeProfile::Counter* _scanner_init_timer = nullptr;
+    RuntimeProfile::Counter* _process_conjunct_timer = nullptr;
 
     RuntimeProfile::Counter* _io_timer = nullptr;
     RuntimeProfile::Counter* _read_compressed_counter = nullptr;

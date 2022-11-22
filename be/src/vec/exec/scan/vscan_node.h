@@ -183,8 +183,10 @@ protected:
 
     // Save all bloom filter predicates which may be pushed down to data source.
     // column name -> bloom filter function
-    std::vector<std::pair<std::string, std::shared_ptr<IBloomFilterFuncBase>>>
+    std::vector<std::pair<std::string, std::shared_ptr<BloomFilterFuncBase>>>
             _bloom_filters_push_down;
+
+    std::vector<std::pair<std::string, std::shared_ptr<HybridSetBase>>> _in_filters_push_down;
 
     // Save all function predicates which may be pushed down to data source.
     std::vector<FunctionFilter> _push_down_functions;
@@ -195,7 +197,7 @@ protected:
             _slot_id_to_value_range;
     // column -> ColumnValueRange
     std::unordered_map<std::string, ColumnValueRangeType> _colname_to_value_range;
-    // We use _colname_to_value_range to store a column and its conresponding value ranges.
+    // We use _colname_to_value_range to store a column and its corresponding value ranges.
     // But if a col is with value range, eg: 1 < col < 10, which is "!is_fixed_range",
     // in this case we can not merge "1 < col < 10" with "col not in (2)".
     // So we have to save "col not in (2)" to another structure: "_not_in_value_ranges".
@@ -221,6 +223,8 @@ protected:
     RuntimeProfile::Counter* _total_throughput_counter;
     RuntimeProfile::Counter* _num_scanners;
 
+    RuntimeProfile::Counter* _get_next_timer = nullptr;
+    RuntimeProfile::Counter* _acquire_runtime_filter_timer = nullptr;
     // time of get block from scanner
     RuntimeProfile::Counter* _scan_timer = nullptr;
     // time of prefilter input block from scanner
@@ -287,8 +291,7 @@ private:
     template <bool IsFixed, PrimitiveType PrimitiveType, typename ChangeFixedValueRangeFunc>
     static Status _change_value_range(ColumnValueRange<PrimitiveType>& range, void* value,
                                       const ChangeFixedValueRangeFunc& func,
-                                      const std::string& fn_name, bool cast_date_to_datetime = true,
-                                      int slot_ref_child = -1);
+                                      const std::string& fn_name, int slot_ref_child = -1);
 
     // Submit the scanner to the thread pool and start execution
     Status _start_scanners(const std::list<VScanner*>& scanners);

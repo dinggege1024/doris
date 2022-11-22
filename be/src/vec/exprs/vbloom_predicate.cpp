@@ -17,8 +17,6 @@
 
 #include "vec/exprs/vbloom_predicate.h"
 
-#include <string_view>
-
 #include "common/status.h"
 #include "vec/data_types/data_type_nullable.h"
 
@@ -35,12 +33,7 @@ Status VBloomPredicate::prepare(RuntimeState* state, const RowDescriptor& desc,
         return Status::InternalError("Invalid argument for VBloomPredicate.");
     }
 
-    ColumnsWithTypeAndName argument_template;
-    argument_template.reserve(_children.size());
-    for (auto child : _children) {
-        auto column = child->data_type()->create_column();
-        argument_template.emplace_back(std::move(column), child->data_type(), child->expr_name());
-    }
+    _be_exec_version = state->be_exec_version();
     return Status::OK();
 }
 
@@ -71,12 +64,23 @@ Status VBloomPredicate::execute(VExprContext* context, Block* block, int* result
     size_t sz = argument_column->size();
     res_data_column->resize(sz);
     auto ptr = ((ColumnVector<UInt8>*)res_data_column.get())->get_data().data();
-    if (WhichDataType(remove_nullable(block->get_by_position(arguments[0]).type))
-                .is_string_or_fixed_string()) {
+    auto type = WhichDataType(remove_nullable(block->get_by_position(arguments[0]).type));
+    if (type.is_string_or_fixed_string()) {
         for (size_t i = 0; i < sz; i++) {
             auto ele = argument_column->get_data_at(i);
             const StringValue v(ele.data, ele.size);
             ptr[i] = _filter->find(reinterpret_cast<const void*>(&v));
+        }
+    } else if (_be_exec_version > 0 && (type.is_int_or_uint() || type.is_float())) {
+        if (argument_column->is_nullable()) {
+            auto column_nested = reinterpret_cast<const ColumnNullable*>(argument_column.get())
+                                         ->get_nested_column_ptr();
+            auto column_nullmap = reinterpret_cast<const ColumnNullable*>(argument_column.get())
+                                          ->get_null_map_column_ptr();
+            _filter->find_fixed_len(column_nested->get_raw_data().data,
+                                    (uint8*)column_nullmap->get_raw_data().data, sz, ptr);
+        } else {
+            _filter->find_fixed_len(argument_column->get_raw_data().data, nullptr, sz, ptr);
         }
     } else {
         for (size_t i = 0; i < sz; i++) {
@@ -84,6 +88,7 @@ Status VBloomPredicate::execute(VExprContext* context, Block* block, int* result
                     reinterpret_cast<const void*>(argument_column->get_data_at(i).data));
         }
     }
+
     if (_data_type->is_nullable()) {
         auto null_map = ColumnVector<UInt8>::create(block->rows(), 0);
         block->insert({ColumnNullable::create(std::move(res_data_column), std::move(null_map)),
@@ -98,7 +103,7 @@ Status VBloomPredicate::execute(VExprContext* context, Block* block, int* result
 const std::string& VBloomPredicate::expr_name() const {
     return _expr_name;
 }
-void VBloomPredicate::set_filter(std::shared_ptr<IBloomFilterFuncBase>& filter) {
+void VBloomPredicate::set_filter(std::shared_ptr<BloomFilterFuncBase>& filter) {
     _filter = filter;
 }
 } // namespace doris::vectorized

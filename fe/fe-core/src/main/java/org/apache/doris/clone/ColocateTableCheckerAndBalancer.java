@@ -41,13 +41,13 @@ import org.apache.doris.system.Backend;
 import org.apache.doris.system.SystemInfoService;
 
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Table;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.parquet.Strings;
 
 import java.util.List;
 import java.util.Map;
@@ -587,6 +587,8 @@ public class ColocateTableCheckerAndBalancer extends MasterDaemon {
         long currTime = System.currentTimeMillis();
         Backend be = infoService.getBackend(backendId);
         if (be == null) {
+            return false;
+        } else if (!be.isMixNode()) {
             return false;
         } else if (!be.getLocationTag().equals(tag) || excludedBeIds.contains(be.getId())) {
             return false;

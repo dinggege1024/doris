@@ -118,12 +118,16 @@ public class TableProperty implements Writable {
      *
      * @return this for chained
      */
-    public TableProperty resetPropertiesForRestore() {
+    public TableProperty resetPropertiesForRestore(boolean reserveDynamicPartitionEnable,
+            ReplicaAllocation replicaAlloc) {
         // disable dynamic partition
         if (properties.containsKey(DynamicPartitionProperty.ENABLE)) {
-            properties.put(DynamicPartitionProperty.ENABLE, "false");
+            if (!reserveDynamicPartitionEnable) {
+                properties.put(DynamicPartitionProperty.ENABLE, "false");
+            }
             executeBuildDynamicProperty();
         }
+        setReplicaAlloc(replicaAlloc);
         return this;
     }
 
@@ -284,6 +288,16 @@ public class TableProperty implements Writable {
     public boolean getEnableUniqueKeyMergeOnWrite() {
         return Boolean.parseBoolean(properties.getOrDefault(
                 PropertyAnalyzer.ENABLE_UNIQUE_KEY_MERGE_ON_WRITE, "false"));
+    }
+
+    public void setSequenceMapCol(String colName) {
+        properties.put(PropertyAnalyzer.PROPERTIES_FUNCTION_COLUMN + "."
+                + PropertyAnalyzer.PROPERTIES_SEQUENCE_COL, colName);
+    }
+
+    public String getSequenceMapCol() {
+        return properties.get(PropertyAnalyzer.PROPERTIES_FUNCTION_COLUMN + "."
+                + PropertyAnalyzer.PROPERTIES_SEQUENCE_COL);
     }
 
     public void buildReplicaAllocation() {

@@ -38,7 +38,7 @@ public:
     TableConnector(const TupleDescriptor* tuple_desc, const std::string& sql_str);
     virtual ~TableConnector() = default;
 
-    virtual Status open() = 0;
+    virtual Status open(RuntimeState* state, bool read = false) = 0;
     // exec query for table
     virtual Status query() = 0;
 
@@ -57,11 +57,14 @@ public:
     //write data into table vectorized
     Status append(const std::string& table_name, vectorized::Block* block,
                   const std::vector<vectorized::VExprContext*>& _output_vexpr_ctxs,
-                  uint32_t start_send_row, uint32_t* num_rows_sent);
+                  uint32_t start_send_row, uint32_t* num_rows_sent,
+                  bool need_extra_convert = false);
 
     void init_profile(RuntimeProfile*);
 
     std::u16string utf8_to_u16string(const char* first, const char* last);
+
+    virtual Status close() { return Status::OK(); }
 
 protected:
     bool _is_open;

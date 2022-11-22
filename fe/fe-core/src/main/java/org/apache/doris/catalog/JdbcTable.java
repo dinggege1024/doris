@@ -71,6 +71,7 @@ public class JdbcTable extends Table {
         tempMap.put("postgresql", TOdbcTableType.POSTGRESQL);
         tempMap.put("sqlserver", TOdbcTableType.SQLSERVER);
         tempMap.put("oracle", TOdbcTableType.ORACLE);
+        tempMap.put("clickhouse", TOdbcTableType.CLICKHOUSE);
         TABLE_TYPE_MAP = Collections.unmodifiableMap(tempMap);
     }
 
@@ -247,6 +248,9 @@ public class JdbcTable extends Table {
         jdbcTypeName = properties.get(TABLE_TYPE);
         if (Strings.isNullOrEmpty(jdbcTypeName)) {
             throw new DdlException("property " + TABLE_TYPE + " must be set");
+        }
+        if (!TABLE_TYPE_MAP.containsKey(jdbcTypeName.toLowerCase())) {
+            throw new DdlException("Unknown jdbc table type: " + jdbcTypeName);
         }
 
         Resource resource = Env.getCurrentEnv().getResourceMgr().getResource(resourceName);

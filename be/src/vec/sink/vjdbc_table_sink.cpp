@@ -17,7 +17,6 @@
 
 #include "vec/sink/vjdbc_table_sink.h"
 
-#ifdef LIBJVM
 #include <gen_cpp/DataSinks_types.h>
 
 #include <sstream>
@@ -47,6 +46,7 @@ Status VJdbcTableSink::init(const TDataSink& t_sink) {
     _jdbc_param.resource_name = t_jdbc_sink.jdbc_table.jdbc_resource_name;
     _table_name = t_jdbc_sink.jdbc_table.jdbc_table_name;
     _use_transaction = t_jdbc_sink.use_transaction;
+    _need_extra_convert = (t_jdbc_sink.table_type == TOdbcTableType::ORACLE);
 
     return Status::OK();
 }
@@ -57,7 +57,7 @@ Status VJdbcTableSink::open(RuntimeState* state) {
 
     // create writer
     _writer.reset(new JdbcConnector(_jdbc_param));
-    RETURN_IF_ERROR(_writer->open());
+    RETURN_IF_ERROR(_writer->open(state, false));
     if (_use_transaction) {
         RETURN_IF_ERROR(_writer->begin_trans());
     }
@@ -81,7 +81,7 @@ Status VJdbcTableSink::send(RuntimeState* state, Block* block) {
     uint32_t num_row_sent = 0;
     while (start_send_row < output_block.rows()) {
         RETURN_IF_ERROR(_writer->append(_table_name, &output_block, _output_vexpr_ctxs,
-                                        start_send_row, &num_row_sent));
+                                        start_send_row, &num_row_sent, _need_extra_convert));
         start_send_row += num_row_sent;
         num_row_sent = 0;
     }
@@ -95,8 +95,8 @@ Status VJdbcTableSink::close(RuntimeState* state, Status exec_status) {
     if (exec_status.ok() && _use_transaction) {
         RETURN_IF_ERROR(_writer->finish_trans());
     }
+    RETURN_IF_ERROR(_writer->close());
     return DataSink::close(state, exec_status);
 }
 } // namespace vectorized
 } // namespace doris
-#endif

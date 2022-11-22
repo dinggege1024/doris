@@ -27,6 +27,7 @@ header:
     - "**/test_data/**"
     - "**/jmockit/**"
     - "**/*.json"
+    - "**/*.csv"
     - "**/*.dat"
     - "**/*.svg"
     - "**/*.md5"
@@ -70,5 +71,8 @@ header:
     - "docs/package-lock.json"
     - "regression-test/script/README"
     - "regression-test/suites/load_p0/stream_load/data"
+    - "docker/thirdparties/docker-compose/hive/scripts/README"
+    - "docker/thirdparties/docker-compose/hive/scripts/create.hql"
+    - "docker/thirdparties/docker-compose/hive/scripts/data_case/*/*"
 
   comment: on-failure
